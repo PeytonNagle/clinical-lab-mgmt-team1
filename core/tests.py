@@ -51,3 +51,28 @@ class BaseTemplateTests(TestCase):
         anonymous = self.render_page(AnonymousUser())
         self.assertIn("page body", anonymous)
         self.assertNotIn("Lab Technician", anonymous)
+
+
+class HomeRedirectTests(TestCase):
+    def test_logged_out_user_is_sent_to_login(self):
+        response = self.client.get("/")
+        self.assertRedirects(response, "/accounts/login/?next=/", fetch_redirect_response=False)
+
+    def test_each_staff_role_lands_on_its_home_page(self):
+        staff_roles = [
+            User.Role.LAB_MANAGER,
+            User.Role.SPECIMEN_COLLECTOR,
+            User.Role.TECHNICIAN,
+            User.Role.PATHOLOGIST,
+            User.Role.CASHIER,
+        ]
+        for role in staff_roles:
+            with self.subTest(role=role):
+                self.client.force_login(User.objects.create_user(username=role, role=role))
+                response = self.client.get("/", follow=True)
+                self.assertContains(response, f"{role.label} home")
+
+    def test_patient_is_refused(self):
+        self.client.force_login(User.objects.create_user(username="pat", role=User.Role.PATIENT))
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 403)
