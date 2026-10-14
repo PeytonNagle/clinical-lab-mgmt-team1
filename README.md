@@ -2,6 +2,33 @@
 
 SFWE 403 semester project, Group 1. Django + PostgreSQL + Bootstrap.
 
+## Run locally
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py seed      # fake users and patients; safe to re-run
+python manage.py runserver # http://127.0.0.1:8000/
+```
+
+### Test logins
+
+Created by `seed`. **Fake and for local testing only. Never run `seed` on a shared or deployed server.**
+Every account uses the password `TestPass123!`.
+
+| Username       | Role               |
+| -------------- | ------------------ |
+| `manager1`     | Lab manager (can also open `/admin/`) |
+| `collector1`   | Specimen collector |
+| `tech1`        | Technician         |
+| `pathologist1` | Pathologist        |
+| `cashier1`     | Cashier            |
+
+- Seeded users skip the first-login password change. To test it, create a user in `/admin/` as `manager1`.
+- No patient or provider users are seeded. Create one in `/admin/` if you need one.
+
 ## Folders
 
 | Folder         | What goes in                                                                        | When                           |
