@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in | CLMS{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-sm-10 col-md-7 col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-body">
+                <ul class="nav nav-tabs card-header-tabs">
+                    <li class="nav-item"><span class="nav-link active">Staff</span></li>
+                    <li class="nav-item">{% include "partials/not_implemented.html" with label="Patient" class="nav-link" %}</li>
+                    <li class="nav-item">{% include "partials/not_implemented.html" with label="Healthcare provider" class="nav-link" %}</li>
+                </ul>
+            </div>
+            <div class="card-body p-4">
+                <h1 class="h4 mb-4">Staff sign in</h1>
+
+                {% for error in form.non_field_errors %}
+                    <div class="alert alert-danger" role="alert">{{ error }}</div>
+                {% endfor %}
+
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ next }}">
+
+                    <div class="mb-3">
+                        <label class="form-label" for="{{ form.username.id_for_label }}">Username</label>
+                        <input class="form-control" type="text" name="{{ form.username.html_name }}"
+                               id="{{ form.username.id_for_label }}" value="{{ form.username.value|default:'' }}"
+                               autocomplete="username" autofocus required>
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label" for="{{ form.password.id_for_label }}">Password</label>
+                        <input class="form-control" type="password" name="{{ form.password.html_name }}"
+                               id="{{ form.password.id_for_label }}" autocomplete="current-password" required>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">Sign in</button>
+                </form>
+
+                <div class="text-center mt-3">
+                    {% include "partials/not_implemented.html" with label="Forgot password?" class="btn btn-link btn-sm" %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

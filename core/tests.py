@@ -76,3 +76,25 @@ class HomeRedirectTests(TestCase):
         self.client.force_login(User.objects.create_user(username="pat", role=User.Role.PATIENT))
         response = self.client.get("/")
         self.assertEqual(response.status_code, 403)
+
+
+class StaffLoginTests(TestCase):
+    def login(self, username, password="s3cret-pass"):
+        return self.client.post("/accounts/login/", {"username": username, "password": password}, follow=True)
+
+    def test_correct_password_lands_on_role_home(self):
+        User.objects.create_user(username="tech1", password="s3cret-pass", role=User.Role.TECHNICIAN)
+        response = self.login("tech1")
+        self.assertRedirects(response, "/home/technician/", target_status_code=200)
+
+    def test_wrong_password_is_rejected(self):
+        User.objects.create_user(username="tech1", password="s3cret-pass", role=User.Role.TECHNICIAN)
+        response = self.login("tech1", password="wrong")
+        self.assertFalse(response.context["user"].is_authenticated)
+        self.assertTrue(response.context["form"].errors)
+
+    def test_patient_is_blocked_on_staff_login(self):
+        User.objects.create_user(username="pat1", password="s3cret-pass", role=User.Role.PATIENT)
+        response = self.login("pat1")
+        self.assertFalse(response.context["user"].is_authenticated)
+        self.assertContains(response, "Patient accounts can&#x27;t sign in here.")

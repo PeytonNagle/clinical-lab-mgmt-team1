@@ -31,3 +31,7 @@ SFWE 403 semester project, Group 1. Django + PostgreSQL + Bootstrap.
 - Branch name: `SXFT-13-short-name`. Never push to `main`.
 - Open a PR, get 1 approval, then merge.
 - Changed a model? Run `python manage.py makemigrations` and commit the migration.
+
+## UI conventions
+
+- Feature not built yet? Show it greyed out with a hint: `{% include "partials/not_implemented.html" with label="Export" %}`.
