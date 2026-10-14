@@ -1,0 +1,17 @@
+{# Login form shown greyed out until patient and provider login are built (SXFT-29). #}
+<h1 class="h4 mb-4">{{ title }}</h1>
+
+{# pe-none lets the hover reach the wrapper, since disabled fields ignore the mouse #}
+<div data-bs-toggle="tooltip" data-bs-title="Not implemented yet">
+    <fieldset class="pe-none" disabled>
+        <div class="mb-3">
+            <label class="form-label">Username</label>
+            <input class="form-control" type="text">
+        </div>
+        <div class="mb-4">
+            <label class="form-label">Password</label>
+            <input class="form-control" type="password">
+        </div>
+        <button type="button" class="btn btn-primary w-100">Sign in</button>
+    </fieldset>
+</div>
