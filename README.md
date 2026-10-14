@@ -26,6 +26,18 @@ SFWE 403 semester project, Group 1. Django + PostgreSQL + Bootstrap.
 | `admin.py`  | Admin panel setup           |
 | `tests.py`  | Tests                       |
 
+## Pages
+
+Every page requires login except the login page.
+
+| URL                | Page                                                                 |
+| ------------------ | -------------------------------------------------------------------- |
+| `/`                | Sends you to your role's home page (logged out: to login)            |
+| `/home/<role>/`    | Placeholder home page per staff role, e.g. `/home/technician/`       |
+| `/accounts/login/` | Login, with Staff / Patient / Healthcare provider tabs (Staff only for now) |
+| `/accounts/logout/` | Logout (POST only, via the navbar button)                           |
+| `/admin/`          | Django admin, for users with `is_staff`                              |
+
 ## Rules
 
 - Branch name: `SXFT-13-short-name`. Never push to `main`.
