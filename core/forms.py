@@ -1,5 +1,5 @@
 from django import forms
-from django.contrib.auth.forms import AuthenticationForm
+from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
 
 from .models import STAFF_ROLES
 
@@ -11,3 +11,20 @@ class StaffLoginForm(AuthenticationForm):
             raise forms.ValidationError(
                 f"{user.get_role_display()} accounts can't sign in here.", code="wrong_portal"
             )
+
+
+class FirstPasswordForm(SetPasswordForm):
+    """Replaces the temporary password a lab manager gave the user."""
+
+    def clean_new_password1(self):
+        password = self.cleaned_data["new_password1"]
+        if self.user.check_password(password):
+            raise forms.ValidationError("Choose a password different from your temporary one.")
+        return password
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.must_change_password = False
+        if commit:
+            user.save()
+        return user

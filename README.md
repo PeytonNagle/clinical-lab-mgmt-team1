@@ -63,12 +63,13 @@ Every page requires login except the login page.
 | `/home/<role>/`    | Placeholder home page per staff role, e.g. `/home/technician/`       |
 | `/accounts/login/` | Login, with Staff / Patient / Healthcare provider tabs (Staff only for now) |
 | `/accounts/logout/` | Logout (POST only, via the navbar button)                           |
+| `/accounts/password/set/` | First login: replace the temporary password (forced until done) |
+| `/accounts/password/change/` | Change password, from the navbar                             |
 | `/admin/`          | Django admin, for users with `is_staff`                              |
 
 ## Rules
 
 - Branch name: `SXFT-13-short-name`. Never push to `main`.
-- Open a PR, get 1 approval, then merge.
 - Changed a model? Run `python manage.py makemigrations` and commit the migration.
 
 ## UI conventions
