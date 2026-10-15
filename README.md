@@ -26,8 +26,10 @@ Every account uses the password `TestPass123!`.
 | `pathologist1` | Pathologist        |
 | `cashier1`     | Cashier            |
 
-- Seeded users skip the first-login password change. To test it, create a user in `/admin/` as `manager1`.
-- No patient or provider users are seeded. Create one in `/admin/` if you need one.
+- To add users in `/admin/`, first make `manager1` a superuser (one time; survives re-seeding):
+  `python manage.py shell -c "from core.models import User; User.objects.filter(username='manager1').update(is_superuser=True)"`
+- Seeded users skip the first-login password change. To test it, add a new user in `/admin/`.
+- No patient or provider users are seeded. Add one in `/admin/` if you need one.
 
 ## Folders
 
@@ -65,7 +67,7 @@ Every page requires login except the login page.
 | `/accounts/logout/` | Logout (POST only, via the navbar button)                           |
 | `/accounts/password/set/` | First login: replace the temporary password (forced until done) |
 | `/accounts/password/change/` | Change password, from the navbar                             |
-| `/admin/`          | Django admin, for users with `is_staff`                              |
+| `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
 
 ## Rules
 
