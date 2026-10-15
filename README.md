@@ -76,7 +76,7 @@ Every page requires login except the login page.
 
 ## Rules
 
-- Branch name: `SXFT-13-short-name`. Never push to `main`.
+- Branch name: `SXFT-xx-short-name`. Never push to `main`.
 - Changed a model? Run `python manage.py makemigrations` and commit the migration.
 
 ## UI conventions
