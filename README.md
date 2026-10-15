@@ -31,6 +31,11 @@ Every account uses the password `TestPass123!`.
 - Seeded users skip the first-login password change. To test it, add a new user in `/admin/`.
 - No patient or provider users are seeded. Add one in `/admin/` if you need one.
 
+### Set up a new lab
+
+Only lab managers can create accounts, so whoever installs the system creates the first one:
+`python manage.py create_lab_manager <username> [--email EMAIL]`. It prints a temporary password, which the manager must change on first login.
+
 ## Folders
 
 | Folder         | What goes in                                                                        | When                           |

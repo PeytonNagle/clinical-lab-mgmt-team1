@@ -12,7 +12,7 @@ class StaffLoginForm(AuthenticationForm):
                 f"{user.get_role_display()} accounts can't sign in here.", code="wrong_portal"
             )
 
-
+# Extended from Django's SetPasswordForm to enforce first-time password change
 class FirstPasswordForm(SetPasswordForm):
     """Replaces the temporary password a lab manager gave the user."""
 

@@ -1,7 +1,7 @@
 from io import StringIO
 
 from django.contrib.auth.models import AnonymousUser
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.template import RequestContext, Template
 from django.test import RequestFactory, TestCase
 
@@ -138,3 +138,20 @@ class PasswordTests(TestCase):
         )
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("fresh-pass-456"))
+
+
+class CreateLabManagerCommandTests(TestCase):
+    def test_creates_lab_manager_with_temporary_password(self):
+        out = StringIO()
+        call_command("create_lab_manager", "boss", stdout=out)
+
+        temporary_password = out.getvalue().split("Temporary password: ")[1].split()[0]
+        user = User.objects.get(username="boss")
+        self.assertEqual(user.role, User.Role.LAB_MANAGER)
+        self.assertTrue(user.must_change_password)
+        self.assertTrue(user.check_password(temporary_password))
+
+    def test_refuses_existing_username(self):
+        User.objects.create_user(username="boss", role=User.Role.TECHNICIAN)
+        with self.assertRaises(CommandError):
+            call_command("create_lab_manager", "boss", stdout=StringIO())
