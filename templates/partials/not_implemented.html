@@ -1,0 +1,7 @@
+{% comment %}
+Greyed-out control for a feature that isn't built yet. The wrapper shows the hint, since disabled buttons ignore hover.
+Usage: {% include "partials/not_implemented.html" with label="Export" class="btn btn-secondary" %}
+{% endcomment %}
+<span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" data-bs-title="Not implemented yet">
+    <button type="button" class="{{ class|default:'btn btn-link' }}" disabled>{{ label }}</button>
+</span>

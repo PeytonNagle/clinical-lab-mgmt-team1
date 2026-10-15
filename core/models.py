@@ -26,3 +26,13 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
+
+
+# Roles that sign in through the staff login. Patient and provider login comes with SXFT-29.
+STAFF_ROLES = {
+    User.Role.LAB_MANAGER,
+    User.Role.SPECIMEN_COLLECTOR,
+    User.Role.TECHNICIAN,
+    User.Role.PATHOLOGIST,
+    User.Role.CASHIER,
+}

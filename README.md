@@ -2,6 +2,40 @@
 
 SFWE 403 semester project, Group 1. Django + PostgreSQL + Bootstrap.
 
+## Run locally
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py seed      # fake users and patients; safe to re-run
+python manage.py runserver # http://127.0.0.1:8000/
+```
+
+### Test logins
+
+Created by `seed`. **Fake and for local testing only. Never run `seed` on a shared or deployed server.**
+Every account uses the password `TestPass123!`.
+
+| Username       | Role               |
+| -------------- | ------------------ |
+| `manager1`     | Lab manager (can also open `/admin/`) |
+| `collector1`   | Specimen collector |
+| `tech1`        | Technician         |
+| `pathologist1` | Pathologist        |
+| `cashier1`     | Cashier            |
+
+- To add users in `/admin/`, first make `manager1` a superuser (one time; survives re-seeding):
+  `python manage.py shell -c "from core.models import User; User.objects.filter(username='manager1').update(is_superuser=True)"`
+- Seeded users skip the first-login password change. To test it, add a new user in `/admin/`.
+- No patient or provider users are seeded. Add one in `/admin/` if you need one.
+
+### Set up a new lab
+
+Only lab managers can create accounts, so whoever installs the system creates the first one:
+`python manage.py create_lab_manager <username> [--email EMAIL]`. It prints a temporary password, which the manager must change on first login.
+
 ## Folders
 
 | Folder         | What goes in                                                                        | When                           |
@@ -26,8 +60,25 @@ SFWE 403 semester project, Group 1. Django + PostgreSQL + Bootstrap.
 | `admin.py`  | Admin panel setup           |
 | `tests.py`  | Tests                       |
 
+## Pages
+
+Every page requires login except the login page.
+
+| URL                | Page                                                                 |
+| ------------------ | -------------------------------------------------------------------- |
+| `/`                | Sends you to your role's home page (logged out: to login)            |
+| `/home/<role>/`    | Placeholder home page per staff role, e.g. `/home/technician/`       |
+| `/accounts/login/` | Login, with Staff / Patient / Healthcare provider tabs (Staff only for now) |
+| `/accounts/logout/` | Logout (POST only, via the navbar button)                           |
+| `/accounts/password/set/` | First login: replace the temporary password (forced until done) |
+| `/accounts/password/change/` | Change password, from the navbar                             |
+| `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
+
 ## Rules
 
-- Branch name: `SXFT-13-short-name`. Never push to `main`.
-- Open a PR, get 1 approval, then merge.
+- Branch name: `SXFT-xx-short-name`. Never push to `main`.
 - Changed a model? Run `python manage.py makemigrations` and commit the migration.
+
+## UI conventions
+
+- Feature not built yet? Show it greyed out with a hint: `{% include "partials/not_implemented.html" with label="Export" %}`.
