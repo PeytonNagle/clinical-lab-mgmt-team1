@@ -155,3 +155,61 @@ class CreateLabManagerCommandTests(TestCase):
         User.objects.create_user(username="boss", role=User.Role.TECHNICIAN)
         with self.assertRaises(CommandError):
             call_command("create_lab_manager", "boss", stdout=StringIO())
+
+#verify manager can correctly create a staff account
+class StaffRegistrationTests(TestCase):
+
+    def test_lab_manager_can_create_staff_account(self):
+        manager = User.objects.create_user(
+            username="manager_test",
+            password="testpassword123",
+            role=User.Role.LAB_MANAGER,
+            must_change_password=False
+        )
+
+        self.client.force_login(manager)
+
+        response = self.client.post("/staff/register/", {
+            "username": "newtech",
+            "first_name": "John",
+            "last_name": "Smith",
+            "email": "john@example.com",
+            "role": User.Role.TECHNICIAN
+        })
+
+        self.assertEqual(response.status_code, 200)
+
+        new_user = User.objects.get(username="newtech")
+
+        self.assertEqual(new_user.role, User.Role.TECHNICIAN)
+
+        self.assertTrue(new_user.must_change_password)
+
+        self.assertTrue(new_user.has_usable_password())       
+        temporary_password = response.context["temporary_password"]
+        self.assertTrue(new_user.check_password(temporary_password))
+
+    #verify no other type of user can create a staff account other than lab manager (tech)
+    def test_non_manager_cannot_create_staff_account(self):
+        technician = User.objects.create_user(
+            username="tech_test",
+            password="testpassword123",
+            role=User.Role.TECHNICIAN,
+            must_change_password=False
+        )
+
+        self.client.force_login(technician)
+
+        response = self.client.post("/staff/register/", {
+            "username": "newtech",
+            "first_name": "John",
+            "last_name": "Smith",
+            "email": "john@example.com",
+            "role": User.Role.TECHNICIAN
+        })
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assertFalse(
+            User.objects.filter(username="newtech").exists()
+        )

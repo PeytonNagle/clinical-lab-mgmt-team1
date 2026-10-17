@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}Register Staff | CLMS{% endblock %}
+
+{% block content %}
+    <h1>Register Staff Member</h1>
+    <p class="text-muted">Create a new staff account.</p>
+
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+
+        <button type="submit">Create Account</button>
+    </form>
+{% endblock %}

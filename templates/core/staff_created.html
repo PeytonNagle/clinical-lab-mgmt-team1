@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Staff Account Created | CLMS{% endblock %}
+
+{% block content %}
+    <h1>Staff Account Created Successfully</h1>
+
+    <p>Username: {{ new_user.username }}</p>
+    <p>Temporary Password: {{ temporary_password }}</p>
+
+    <p class="text-muted">
+        Save this password securely. It will not be shown again.
+        The employee must change it when they first log in.
+    </p>
+
+    <a href="{% url 'register_staff' %}">
+        Register Another Staff Member
+    </a>
+{% endblock %}
