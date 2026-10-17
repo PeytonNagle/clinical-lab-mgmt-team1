@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Remove patient | CLMS{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-sm-10 col-md-7 col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-2">Remove {{ patient }}?</h1>
+                <p class="text-muted">
+                    The patient will no longer appear in the patient list. Their records are kept.
+                </p>
+                <form method="post" class="d-flex gap-2">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger">Remove patient</button>
+                    <a class="btn btn-outline-secondary" href="{% url 'patient_list' %}">Cancel</a>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
