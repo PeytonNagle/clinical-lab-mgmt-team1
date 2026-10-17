@@ -5,10 +5,11 @@ from django.core.exceptions import PermissionDenied
 from django.http import Http404
 from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
+from django.contrib.auth.decorators import login_required
 
-from .forms import FirstPasswordForm
+from .forms import FirstPasswordForm, RegistrationForm
 from .models import STAFF_ROLES, User
-
+import secrets
 
 def home(request):
     """Send each user to their role's home page."""
@@ -44,3 +45,32 @@ class SetFirstPasswordView(ChangePasswordView):
     form_class = FirstPasswordForm
     success_message = "Password set."
     extra_context = {"title": "Set your password", "intro": "Replace your temporary password before continuing."}
+
+
+
+@login_required
+def register_staff(request):
+    if request.user.role != User.Role.LAB_MANAGER:
+        raise PermissionDenied("Only lab managers can create staff accounts.")
+
+    if request.method == "POST":
+        form = RegistrationForm(request.POST)
+
+        if form.is_valid():
+            user = form.save(commit=False)
+
+            # Generate a temporary password
+            temporary_password = secrets.token_urlsafe(12)
+            user.set_password(temporary_password)
+            user.must_change_password = True
+            user.save()
+
+            # Display the temporary password once
+            return render(request, "core/staff_created.html", {
+                "new_user": user,
+                "temporary_password": temporary_password,
+            })
+    else:
+        form = RegistrationForm()
+
+    return render(request, "core/register_staff.html", {"form": form})

@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
 
-from .models import STAFF_ROLES
+from .models import STAFF_ROLES, User
 
 
 class StaffLoginForm(AuthenticationForm):
@@ -28,3 +28,16 @@ class FirstPasswordForm(SetPasswordForm):
         if commit:
             user.save()
         return user
+
+class RegistrationForm(forms.ModelForm):
+    class Meta:
+        model = User
+        fields = ["username", "first_name", "last_name", "email", "role"]
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields["role"].choices = [
+            (value,label)
+            for value, label in self.fields["role"].choices
+            if value in STAFF_ROLES
+        ]
+
