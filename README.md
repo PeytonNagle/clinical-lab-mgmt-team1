@@ -72,6 +72,10 @@ Every page requires login except the login page.
 | `/accounts/logout/` | Logout (POST only, via the navbar button)                           |
 | `/accounts/password/set/` | First login: replace the temporary password (forced until done) |
 | `/accounts/password/change/` | Change password, from the navbar                             |
+| `/patients/`       | Patient list with search; any staff role. Also linked in the navbar  |
+| `/patients/new/`   | Create a patient account (any staff role)                            |
+| `/patients/<id>/edit/` | Update a patient account (any staff role)                        |
+| `/patients/<id>/remove/` | Remove (deactivate) a patient: lab manager, specimen collector, or cashier |
 | `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
 
 ## Rules

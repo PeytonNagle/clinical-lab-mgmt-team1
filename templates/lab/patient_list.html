@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Patients | CLMS{% endblock %}
+
+{% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3 m-0">Patients</h1>
+        <a class="btn btn-primary" href="{% url 'patient_create' %}">New patient</a>
+    </div>
+
+    <form method="get" class="d-flex gap-2 mb-3">
+        <input class="form-control" type="search" name="q" value="{{ query }}"
+               placeholder="Search by name, phone, or policy number" aria-label="Search patients">
+        <button type="submit" class="btn btn-outline-primary">Search</button>
+        {% if query %}<a class="btn btn-link" href="{% url 'patient_list' %}">Clear</a>{% endif %}
+    </form>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Date of birth</th>
+                        <th>Phone</th>
+                        <th>Insurance</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for patient in patients %}
+                        <tr>
+                            <td>{{ patient }}</td>
+                            <td>{{ patient.date_of_birth|date:"Y-m-d" }}</td>
+                            <td>{{ patient.phone }}</td>
+                            <td>{{ patient.insurance_provider }} &middot; {{ patient.insurance_policy_number }}</td>
+                            <td class="text-end text-nowrap">
+                                <a class="btn btn-sm btn-outline-secondary" href="{% url 'patient_update' patient.pk %}">Edit</a>
+                                {% if can_remove %}
+                                    <a class="btn btn-sm btn-outline-danger" href="{% url 'patient_remove' patient.pk %}">Remove</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">
+                                {% if query %}No patients match "{{ query }}".{% else %}No patients yet.{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endblock %}
