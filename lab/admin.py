@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Patient
+from .models import Patient, TestOrder, TestType
 
 
 @admin.register(Patient)
@@ -15,3 +15,23 @@ class PatientAdmin(admin.ModelAdmin):
     )
     list_filter = ("is_active", "gender")
     search_fields = ("first_name", "last_name", "phone", "insurance_policy_number")
+
+
+@admin.register(TestType)
+class TestTypeAdmin(admin.ModelAdmin):
+    list_display = ("code", "name")
+    search_fields = ("code", "name")
+
+
+@admin.register(TestOrder)
+class TestOrderAdmin(admin.ModelAdmin):
+    list_display = ("id", "patient", "source", "status", "created_at")
+    list_filter = ("status", "source")
+    search_fields = (
+        "patient__last_name",
+        "patient__first_name",
+        "physician_name",
+        "physician_license_id",
+    )
+    filter_horizontal = ("tests",)
+    readonly_fields = ("created_at",)
