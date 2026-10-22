@@ -6,7 +6,7 @@ from django.urls import reverse
 
 from core.models import User
 
-from .models import Patient
+from .models import Patient, TestOrder, TestType
 
 
 def make_patient(**overrides):
@@ -161,3 +161,44 @@ class PatientViewTests(TestCase):
         response = self.client.get(reverse("patient_list"))
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response["Location"])
+
+
+class TestOrderModelTests(TestCase):
+    def make_order(self, **overrides):
+        patient = make_patient()
+        patient.save()
+        cashier = User.objects.create_user(
+            username="cashier", password="s3cret-pass", role=User.Role.CASHIER
+        )
+        data = {
+            "patient": patient,
+            "source": TestOrder.Source.WALK_IN,
+            "physician_name": "Dr. Ana Patel",
+            "physician_license_id": "AZ-12345",
+            "entered_by": cashier,
+        }
+        data.update(overrides)
+        return TestOrder.objects.create(**data)
+
+    def test_migrate_seeds_bmp_cbc_and_lipid_panel(self):
+        self.assertEqual(
+            dict(TestType.objects.values_list("code", "name")),
+            {
+                "BMP": "Basic metabolic panel",
+                "CBC": "Complete blood count",
+                "LIPID": "Lipid panel",
+            },
+        )
+
+    def test_order_with_several_tests_is_pending_and_listed_under_patient(self):
+        order = self.make_order()
+        order.tests.set(TestType.objects.all())
+        order.refresh_from_db()
+        self.assertEqual(order.status, TestOrder.Status.PENDING)
+        self.assertEqual(order.tests.count(), 3)
+        self.assertEqual(list(order.patient.orders.all()), [order])
+
+    def test_physician_license_id_is_trimmed_and_uppercased_on_save(self):
+        order = self.make_order(physician_license_id="  az-12345 ")
+        order.refresh_from_db()
+        self.assertEqual(order.physician_license_id, "AZ-12345")
