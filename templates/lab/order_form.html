@@ -70,20 +70,7 @@
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.4.3/dist/js/tom-select.complete.min.js"
         integrity="sha384-A4TlP4zHVPP9oVIQ8pTVaV6MhvBkDx1sRpmEUfAlO5e7xpodrdr6uNmUV7alXAWW" crossorigin="anonymous"></script>
 <script>
-    // The server already filtered the results, so every one is shown (score always 1).
-    // Old results are cleared on each search so they don't pile up; the chosen patient stays.
-    const patientBox = new TomSelect("#{{ form.patient.id_for_label }}", {
-        placeholder: "Type a name, phone number or policy number",
-        maxItems: 1,
-        loadThrottle: 250,
-        shouldLoad: (query) => query.length >= {{ search_min_length }},
-        score: () => () => 1,
-        load: (query, callback) => {
-            fetch("{% url 'patient_search' %}?q=" + encodeURIComponent(query))
-                .then((response) => response.json())
-                .then((data) => { patientBox.clearOptions(); callback(data.results); })
-                .catch(() => callback());
-        },
-    });
+    // Turns the patient dropdown into a box you can type in to narrow the list.
+    new TomSelect("#{{ form.patient.id_for_label }}");
 </script>
 {% endblock %}

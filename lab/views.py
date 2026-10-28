@@ -2,13 +2,12 @@ from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Q
-from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from core.decorators import role_required
 from core.models import STAFF_ROLES, User
 
-from .forms import PatientForm, TestOrderForm, patient_label
+from .forms import PatientForm, TestOrderForm
 from .models import Patient, TestOrder
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
@@ -21,12 +20,12 @@ CAN_REMOVE_PATIENTS = (
 
 
 ORDERS_PER_PAGE = 25
-PATIENT_SEARCH_MIN_LENGTH = 2
-PATIENT_SEARCH_LIMIT = 10
 
 
-def active_patients(query=""):
+@role_required(*STAFF_ROLES)
+def patient_list(request):
     """Active patients, optionally filtered by name, phone, or policy number."""
+    query = request.GET.get("q", "").strip()
     patients = Patient.objects.filter(is_active=True)
     if query:
         patients = patients.filter(
@@ -35,13 +34,6 @@ def active_patients(query=""):
             | Q(phone__icontains=query)
             | Q(insurance_policy_number__icontains=query)
         )
-    return patients
-
-
-@role_required(*STAFF_ROLES)
-def patient_list(request):
-    query = request.GET.get("q", "").strip()
-    patients = active_patients(query)
     return render(
         request,
         "lab/patient_list.html",
@@ -86,16 +78,6 @@ def patient_remove(request, pk):
 
 
 @role_required(*STAFF_ROLES)
-def patient_search(request):
-    """JSON for the order form's patient box, in the shape Tom Select expects."""
-    query = request.GET.get("q", "").strip()
-    if len(query) < PATIENT_SEARCH_MIN_LENGTH:
-        return JsonResponse({"results": []})
-    found = active_patients(query)[:PATIENT_SEARCH_LIMIT]
-    return JsonResponse({"results": [{"value": p.pk, "text": patient_label(p)} for p in found]})
-
-
-@role_required(*STAFF_ROLES)
 def order_create(request):
     form = TestOrderForm(request.POST or None, initial={"patient": request.GET.get("patient")})
     if request.method == "POST" and form.is_valid():
@@ -106,7 +88,7 @@ def order_create(request):
             form.save_m2m()
         messages.success(request, f"Order #{order.pk} created for {order.patient}.")
         return redirect("order_list")
-    return render(request, "lab/order_form.html", {"form": form, "search_min_length": PATIENT_SEARCH_MIN_LENGTH})
+    return render(request, "lab/order_form.html", {"form": form})
 
 
 @role_required(*STAFF_ROLES)

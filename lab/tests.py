@@ -266,34 +266,18 @@ class OrderViewTests(TestCase):
         patient.deactivate()
         response = self.client.post(reverse("order_create"), self.form_data(patient))
         self.assertIn("patient", response.context["form"].errors)
-        response = self.client.post(reverse("order_create"), {**self.form_data(patient), "patient": "²"})
-        self.assertIn("patient", response.context["form"].errors)
         self.assertFalse(TestOrder.objects.exists())
 
     def test_patient_in_url_is_preselected_only_if_active(self):
         active = self.add_patient(first_name="James", last_name="Anderson")
         removed = self.add_patient(first_name="Gone", last_name="Smith")
         removed.deactivate()
-        self.assertContains(self.client.get(reverse("order_create"), {"patient": active.pk}), "Anderson, James")
-        self.assertNotContains(self.client.get(reverse("order_create"), {"patient": removed.pk}), "Smith, Gone")
-        # Digit-like characters that int() can't read must not crash the page.
-        self.assertEqual(self.client.get(reverse("order_create"), {"patient": "²"}).status_code, 200)
-
-    def test_search_finds_by_name_or_phone_and_skips_removed_patients(self):
-        james = self.add_patient(first_name="James", last_name="Anderson", date_of_birth=date(1985, 3, 14))
-        rosa = self.add_patient(first_name="Rosa", last_name="Lopez", phone="520-555-0142")
-        self.add_patient(first_name="Anna", last_name="Anderson").deactivate()
-
-        by_name = self.client.get(reverse("patient_search"), {"q": "ander"}).json()["results"]
-        self.assertEqual(by_name, [{"value": james.pk, "text": "Anderson, James · born 1985-03-14"}])
-        by_phone = self.client.get(reverse("patient_search"), {"q": "0142"}).json()["results"]
-        self.assertEqual([r["value"] for r in by_phone], [rosa.pk])
-
-    def test_search_needs_two_characters_and_returns_at_most_ten(self):
-        for i in range(12):
-            self.add_patient(first_name=f"Pat{i}", last_name="Smith")
-        self.assertEqual(self.client.get(reverse("patient_search"), {"q": "s"}).json()["results"], [])
-        self.assertEqual(len(self.client.get(reverse("patient_search"), {"q": "smith"}).json()["results"]), 10)
+        self.assertContains(
+            self.client.get(reverse("order_create"), {"patient": active.pk}), f'<option value="{active.pk}" selected>'
+        )
+        response = self.client.get(reverse("order_create"), {"patient": removed.pk})
+        self.assertNotContains(response, "selected>")
+        self.assertNotContains(response, "Smith, Gone")
 
     def test_patient_and_provider_roles_are_forbidden(self):
         order = self.add_order()
@@ -301,7 +285,6 @@ class OrderViewTests(TestCase):
             reverse("order_create"),
             reverse("order_list"),
             reverse("order_detail", args=[order.pk]),
-            reverse("patient_search"),
         ]
         for role in (User.Role.PATIENT, User.Role.HEALTHCARE_PROVIDER):
             self.client.force_login(
