@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from core.models import User
 
@@ -202,3 +203,124 @@ class TestOrderModelTests(TestCase):
         order = self.make_order(physician_license_id="  az-12345 ")
         order.refresh_from_db()
         self.assertEqual(order.physician_license_id, "AZ-12345")
+
+
+class OrderViewTests(TestCase):
+    def setUp(self):
+        self.staff = User.objects.create_user(
+            username="tech", password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
+        )
+        self.client.force_login(self.staff)
+
+    def add_patient(self, **overrides):
+        patient = make_patient(**overrides)
+        patient.save()
+        return patient
+
+    def add_order(self, patient=None, codes=("BMP",), **overrides):
+        data = {
+            "patient": patient or self.add_patient(),
+            "source": TestOrder.Source.WALK_IN,
+            "physician_name": "Dr. Ana Patel",
+            "physician_license_id": "AZ-12345",
+            "entered_by": self.staff,
+        }
+        data.update(overrides)
+        order = TestOrder.objects.create(**data)
+        order.tests.set(TestType.objects.filter(code__in=codes))
+        return order
+
+    def form_data(self, patient, **overrides):
+        data = {
+            "patient": patient.pk,
+            "source": "phone_in",
+            "tests": list(TestType.objects.filter(code__in=["BMP", "LIPID"]).values_list("pk", flat=True)),
+            "physician_name": "Dr. Ana Patel",
+            "physician_license_id": "  az-12345 ",
+            "physician_phone": "",
+        }
+        data.update(overrides)
+        return data
+
+    def test_staff_places_order_and_lands_on_the_list(self):
+        patient = self.add_patient(first_name="James", last_name="Anderson")
+        response = self.client.post(reverse("order_create"), self.form_data(patient), follow=True)
+        order = TestOrder.objects.get()
+        self.assertRedirects(response, reverse("order_list"))
+        self.assertContains(response, f"Order #{order.pk} created for Anderson, James")
+        self.assertEqual(order.patient, patient)
+        self.assertEqual(order.entered_by, self.staff)
+        self.assertEqual(order.status, TestOrder.Status.PENDING)
+        self.assertEqual(order.source, TestOrder.Source.PHONE_IN)
+        self.assertEqual(order.physician_license_id, "AZ-12345")
+        self.assertEqual(sorted(order.tests.values_list("code", flat=True)), ["BMP", "LIPID"])
+
+    def test_order_with_no_tests_is_rejected(self):
+        response = self.client.post(reverse("order_create"), self.form_data(self.add_patient(), tests=[]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("tests", response.context["form"].errors)
+        self.assertFalse(TestOrder.objects.exists())
+
+    def test_removed_patient_cannot_be_ordered_for(self):
+        patient = self.add_patient()
+        patient.deactivate()
+        response = self.client.post(reverse("order_create"), self.form_data(patient))
+        self.assertIn("patient", response.context["form"].errors)
+        self.assertFalse(TestOrder.objects.exists())
+
+    def test_patient_in_url_is_preselected_only_if_active(self):
+        active = self.add_patient(first_name="James", last_name="Anderson")
+        removed = self.add_patient(first_name="Gone", last_name="Smith")
+        removed.deactivate()
+        self.assertContains(
+            self.client.get(reverse("order_create"), {"patient": active.pk}), f'<option value="{active.pk}" selected>'
+        )
+        response = self.client.get(reverse("order_create"), {"patient": removed.pk})
+        self.assertNotContains(response, "selected>")
+        self.assertNotContains(response, "Smith, Gone")
+
+    def test_patient_and_provider_roles_are_forbidden(self):
+        order = self.add_order()
+        urls = [
+            reverse("order_create"),
+            reverse("order_list"),
+            reverse("order_detail", args=[order.pk]),
+        ]
+        for role in (User.Role.PATIENT, User.Role.HEALTHCARE_PROVIDER):
+            self.client.force_login(
+                User.objects.create_user(username=role, password="s3cret-pass", role=role, must_change_password=False)
+            )
+            for url in urls:
+                with self.subTest(role=role, url=url):
+                    self.assertEqual(self.client.get(url).status_code, 403)
+            with self.subTest(role=role, url="post"):
+                response = self.client.post(reverse("order_create"), self.form_data(order.patient))
+                self.assertEqual(response.status_code, 403)
+        self.assertEqual(TestOrder.objects.count(), 1)
+
+    def test_list_shows_newest_first_and_keeps_orders_of_removed_patients(self):
+        older = self.add_order(self.add_patient(first_name="James", last_name="Anderson"), codes=("BMP", "CBC"))
+        TestOrder.objects.filter(pk=older.pk).update(created_at=timezone.now() - timedelta(days=1))
+        removed = self.add_patient(first_name="Rosa", last_name="Lopez")
+        self.add_order(removed, source=TestOrder.Source.PHONE_IN)
+        removed.deactivate()
+
+        html = self.client.get(reverse("order_list")).content.decode()
+        self.assertLess(html.index("Lopez, Rosa"), html.index("Anderson, James"))
+        for text in ("BMP, CBC", "Phone-in", "Walk-in", "Pending", "Removed"):
+            self.assertIn(text, html)
+
+    def test_list_is_paginated_25_per_page(self):
+        oldest = self.add_order()
+        for _ in range(25):
+            self.add_order()
+        oldest_url = reverse("order_detail", args=[oldest.pk])
+        self.assertNotContains(self.client.get(reverse("order_list")), oldest_url)
+        self.assertContains(self.client.get(reverse("order_list"), {"page": 2}), oldest_url)
+
+    def test_detail_shows_whole_order_even_if_patient_was_removed(self):
+        order = self.add_order(codes=("BMP", "LIPID"), physician_phone="520-555-0199")
+        order.patient.deactivate()
+        response = self.client.get(reverse("order_detail", args=[order.pk]))
+        for text in ("Dr. Ana Patel", "AZ-12345", "520-555-0199", "tech", "Doe, Jane", "Basic metabolic panel", "Lipid panel"):
+            self.assertContains(response, text)

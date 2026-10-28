@@ -1,12 +1,14 @@
 from django.contrib import messages
+from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 
 from core.decorators import role_required
 from core.models import STAFF_ROLES, User
 
-from .forms import PatientForm
-from .models import Patient
+from .forms import PatientForm, TestOrderForm
+from .models import Patient, TestOrder
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
 # Cashiers are added by change request for backlog item 5.
@@ -15,6 +17,9 @@ CAN_REMOVE_PATIENTS = (
     User.Role.SPECIMEN_COLLECTOR,
     User.Role.CASHIER,
 )
+
+
+ORDERS_PER_PAGE = 25
 
 
 @role_required(*STAFF_ROLES)
@@ -70,3 +75,31 @@ def patient_remove(request, pk):
         messages.success(request, f"Patient {patient} removed.")
         return redirect("patient_list")
     return render(request, "lab/patient_confirm_remove.html", {"patient": patient})
+
+
+@role_required(*STAFF_ROLES)
+def order_create(request):
+    form = TestOrderForm(request.POST or None, initial={"patient": request.GET.get("patient")})
+    if request.method == "POST" and form.is_valid():
+        with transaction.atomic():
+            order = form.save(commit=False)
+            order.entered_by = request.user
+            order.save()
+            form.save_m2m()
+        messages.success(request, f"Order #{order.pk} created for {order.patient}.")
+        return redirect("order_list")
+    return render(request, "lab/order_form.html", {"form": form})
+
+
+@role_required(*STAFF_ROLES)
+def order_list(request):
+    # pk breaks ties so orders made in the same instant never swap pages.
+    orders = TestOrder.objects.select_related("patient").prefetch_related("tests").order_by("-created_at", "-pk")
+    page = Paginator(orders, ORDERS_PER_PAGE).get_page(request.GET.get("page"))
+    return render(request, "lab/order_list.html", {"page": page})
+
+
+@role_required(*STAFF_ROLES)
+def order_detail(request, pk):
+    orders = TestOrder.objects.select_related("patient", "entered_by").prefetch_related("tests")
+    return render(request, "lab/order_detail.html", {"order": get_object_or_404(orders, pk=pk)})
