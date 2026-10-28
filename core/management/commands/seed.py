@@ -85,12 +85,15 @@ def seed_orders():
     now = timezone.now()
     for i in range(ORDER_COUNT):
         name, license_id, phone = PHYSICIANS[i % len(PHYSICIANS)]
+        patient = patients[i % len(patients)]
         order = TestOrder.objects.create(
-            patient=patients[i % len(patients)],
+            patient=patient,
             source=TestOrder.Source.PHONE_IN if i % 3 == 0 else TestOrder.Source.WALK_IN,
             physician_name=name,
             physician_license_id=license_id,
             physician_phone=phone,
+            insurance_provider=patient.insurance_provider,
+            insurance_policy_number=patient.insurance_policy_number,
             entered_by=staff[i % len(staff)],
             status=TestOrder.Status.COMPLETED if i % 5 == 0 else TestOrder.Status.PENDING,
         )

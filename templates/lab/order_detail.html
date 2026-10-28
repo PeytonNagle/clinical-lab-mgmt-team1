@@ -50,6 +50,15 @@
         </div>
         <div class="col-md-6">
             <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h6 text-uppercase text-muted">Insurance</h2>
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Provider</dt><dd class="col-sm-8">{{ order.insurance_provider }}</dd>
+                    <dt class="col-sm-4">Policy number</dt><dd class="col-sm-8">{{ order.insurance_policy_number }}</dd>
+                </dl>
+            </div></div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100"><div class="card-body">
                 <h2 class="h6 text-uppercase text-muted">Tests</h2>
                 <dl class="row mb-0">
                     {% for test in order.tests.all %}
