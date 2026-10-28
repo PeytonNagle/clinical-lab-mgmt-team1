@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Order #{{ order.pk }} | CLMS{% endblock %}
+
+{% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3 m-0">
+            Order #{{ order.pk }}
+            <span class="badge text-bg-{% if order.status == 'completed' %}success{% else %}warning{% endif %} fs-6 align-middle">{{ order.get_status_display }}</span>
+        </h1>
+        <a href="{% url 'order_list' %}">&lsaquo; All orders</a>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h6 text-uppercase text-muted">Order</h2>
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Report ID</dt><dd class="col-sm-8">{{ order.pk }}</dd>
+                    <dt class="col-sm-4">Report date</dt><dd class="col-sm-8">{{ order.created_at|date:"M j, Y, g:i a" }}</dd>
+                    <dt class="col-sm-4">Source</dt><dd class="col-sm-8">{{ order.get_source_display }}</dd>
+                    <dt class="col-sm-4">Entered by</dt><dd class="col-sm-8">{{ order.entered_by.get_full_name|default:order.entered_by.username }}</dd>
+                </dl>
+            </div></div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h6 text-uppercase text-muted">Patient</h2>
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Name</dt>
+                    <dd class="col-sm-8">
+                        {{ order.patient }}
+                        {% if not order.patient.is_active %}<span class="badge text-bg-secondary">Removed</span>{% endif %}
+                    </dd>
+                    <dt class="col-sm-4">Born</dt><dd class="col-sm-8">{{ order.patient.date_of_birth|date:"Y-m-d" }}</dd>
+                    <dt class="col-sm-4">Gender</dt><dd class="col-sm-8">{{ order.patient.get_gender_display }}</dd>
+                    <dt class="col-sm-4">Phone</dt><dd class="col-sm-8">{{ order.patient.phone }}</dd>
+                </dl>
+            </div></div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h6 text-uppercase text-muted">Ordering physician</h2>
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Name</dt><dd class="col-sm-8">{{ order.physician_name }}</dd>
+                    <dt class="col-sm-4">License ID</dt><dd class="col-sm-8">{{ order.physician_license_id }}</dd>
+                    <dt class="col-sm-4">Phone</dt><dd class="col-sm-8">{{ order.physician_phone|default:"&mdash;" }}</dd>
+                </dl>
+            </div></div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h6 text-uppercase text-muted">Tests</h2>
+                <dl class="row mb-0">
+                    {% for test in order.tests.all %}
+                        <dt class="col-sm-4">{{ test.code }}</dt><dd class="col-sm-8">{{ test.name }}</dd>
+                    {% endfor %}
+                </dl>
+            </div></div>
+        </div>
+    </div>
+{% endblock %}
