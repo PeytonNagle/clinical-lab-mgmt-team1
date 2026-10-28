@@ -5,16 +5,18 @@ Every name, address, phone number, email and insurance number below is made up.
 Never run this against a production database.
 
 Usage: python manage.py seed
-Safe to run more than once: existing rows are updated, not duplicated.
+Safe to run more than once: existing rows are updated, not duplicated, and orders are
+added only while there are none.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 from core.models import User
-from lab.models import Patient
+from lab.models import Patient, TestOrder, TestType
 
 # Shared password for every seeded staff account (stored hashed via set_password).
 SEED_PASSWORD = "TestPass123!"
@@ -62,9 +64,44 @@ PATIENTS = [
      "insurance_provider": "UnitedHealthcare", "insurance_policy_number": "UHC-773560", "is_active": True},
 ]
 
+# Fake ordering physicians: (name, license ID, phone).
+PHYSICIANS = [
+    ("Dr. Ana Patel", "AZ-12345", "520-555-0201"),
+    ("Dr. Marcus Webb", "AZ-23456", ""),
+    ("Dr. Priya Shah", "AZ-34567", "520-555-0203"),
+]
+
+# Enough to fill more than one page of the order list (25 per page).
+ORDER_COUNT = 30
+
+
+def seed_orders():
+    """Spread orders over the active patients and the last 30 days. Skipped once any order exists."""
+    if TestOrder.objects.exists():
+        return 0
+    patients = list(Patient.objects.filter(is_active=True))
+    staff = list(User.objects.filter(username__in=[u["username"] for u in STAFF_USERS]))
+    test_types = list(TestType.objects.all())
+    now = timezone.now()
+    for i in range(ORDER_COUNT):
+        name, license_id, phone = PHYSICIANS[i % len(PHYSICIANS)]
+        order = TestOrder.objects.create(
+            patient=patients[i % len(patients)],
+            source=TestOrder.Source.PHONE_IN if i % 3 == 0 else TestOrder.Source.WALK_IN,
+            physician_name=name,
+            physician_license_id=license_id,
+            physician_phone=phone,
+            entered_by=staff[i % len(staff)],
+            status=TestOrder.Status.COMPLETED if i % 5 == 0 else TestOrder.Status.PENDING,
+        )
+        # One to three tests per order; created_at is set on create, so move it back afterwards.
+        order.tests.set(test_types[: i % len(test_types) + 1])
+        TestOrder.objects.filter(pk=order.pk).update(created_at=now - timedelta(hours=23 * (ORDER_COUNT - i)))
+    return ORDER_COUNT
+
 
 class Command(BaseCommand):
-    help = "Load FAKE seed data (staff users and patients) for local testing only."
+    help = "Load FAKE seed data (staff users, patients and orders) for local testing only."
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -94,7 +131,9 @@ class Command(BaseCommand):
             _, created = Patient.objects.update_or_create(**lookup, defaults=defaults)
             patients_created += created
 
+        orders_created = seed_orders()
+
         self.stdout.write(self.style.SUCCESS(
             f"Seed complete: {len(STAFF_USERS)} users, {len(PATIENTS)} patients "
-            f"({users_created} users and {patients_created} patients newly created)"
+            f"({users_created} users, {patients_created} patients and {orders_created} orders newly created)"
         ))
