@@ -76,6 +76,10 @@ Every page requires login except the login page.
 | `/patients/new/`   | Create a patient account (any staff role)                            |
 | `/patients/<id>/edit/` | Update a patient account (any staff role)                        |
 | `/patients/<id>/remove/` | Remove (deactivate) a patient: lab manager, specimen collector, or cashier |
+| `/orders/`         | Order list, newest first, 25 per page; any staff role. Also linked in the navbar |
+| `/orders/new/`     | Place a test order, with insurance filled in from the patient (any staff role) |
+| `/orders/<id>/`    | Order detail: patient, physician, insurance and tests                |
+| `/staff/register/` | Create a staff account (lab manager only)                            |
 | `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
 
 ## Rules
