@@ -87,6 +87,13 @@ class PatientViewTests(TestCase):
         self.assertIn("insurance_policy_number", response.context["form"].errors)
         self.assertFalse(Patient.objects.exists())
 
+    def test_policy_number_with_a_bad_character_is_rejected(self):
+        self.login_as(User.Role.CASHIER)
+        data = {**PATIENT_FORM_DATA, "insurance_policy_number": "POL 12345"}
+        response = self.client.post(reverse("patient_create"), data)
+        self.assertEqual(list(response.context["form"].errors), ["insurance_policy_number"])
+        self.assertFalse(Patient.objects.exists())
+
     def test_cashier_updates_patient(self):
         self.login_as(User.Role.CASHIER)
         patient = make_patient()
@@ -223,6 +230,8 @@ class OrderViewTests(TestCase):
             "source": TestOrder.Source.WALK_IN,
             "physician_name": "Dr. Ana Patel",
             "physician_license_id": "AZ-12345",
+            "insurance_provider": "Acme Health",
+            "insurance_policy_number": "POL-12345",
             "entered_by": self.staff,
         }
         data.update(overrides)
@@ -238,6 +247,8 @@ class OrderViewTests(TestCase):
             "physician_name": "Dr. Ana Patel",
             "physician_license_id": "  az-12345 ",
             "physician_phone": "",
+            "insurance_provider": "  Aetna ",
+            "insurance_policy_number": " AET-558812 ",
         }
         data.update(overrides)
         return data
@@ -253,6 +264,7 @@ class OrderViewTests(TestCase):
         self.assertEqual(order.status, TestOrder.Status.PENDING)
         self.assertEqual(order.source, TestOrder.Source.PHONE_IN)
         self.assertEqual(order.physician_license_id, "AZ-12345")
+        self.assertEqual((order.insurance_provider, order.insurance_policy_number), ("Aetna", "AET-558812"))
         self.assertEqual(sorted(order.tests.values_list("code", flat=True)), ["BMP", "LIPID"])
 
     def test_order_with_no_tests_is_rejected(self):
@@ -260,6 +272,61 @@ class OrderViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("tests", response.context["form"].errors)
         self.assertFalse(TestOrder.objects.exists())
+
+    def test_order_keeps_its_own_insurance_when_the_patient_changes_later(self):
+        patient = self.add_patient()
+        data = self.form_data(patient, insurance_provider="Cigna", insurance_policy_number="CIG-330945")
+        self.client.post(reverse("order_create"), data)
+        patient.insurance_provider = "Humana"
+        patient.save()
+        order = TestOrder.objects.get()
+        self.assertEqual((order.insurance_provider, order.insurance_policy_number), ("Cigna", "CIG-330945"))
+
+    def test_bad_insurance_is_rejected_on_its_own_field_and_nothing_is_saved(self):
+        patient = self.add_patient()
+        bad = [
+            ("insurance_provider", "   "),
+            ("insurance_policy_number", "   "),
+            ("insurance_policy_number", "AET 558812"),
+        ]
+        for field, value in bad:
+            with self.subTest(field=field, value=value):
+                response = self.client.post(reverse("order_create"), self.form_data(patient, **{field: value}))
+                self.assertEqual(list(response.context["form"].errors), [field])
+        self.assertFalse(TestOrder.objects.exists())
+
+    def test_self_pay_is_accepted_in_both_insurance_fields(self):
+        data = self.form_data(self.add_patient(), insurance_provider="SELF-PAY", insurance_policy_number="SELF-PAY")
+        self.client.post(reverse("order_create"), data)
+        order = TestOrder.objects.get()
+        self.assertEqual((order.insurance_provider, order.insurance_policy_number), ("SELF-PAY", "SELF-PAY"))
+
+    def test_patient_in_url_fills_in_their_insurance_only_if_active(self):
+        active = self.add_patient(insurance_provider="Aetna", insurance_policy_number="AET-558812")
+        removed = self.add_patient(insurance_provider="Humana", insurance_policy_number="HUM-610284")
+        removed.deactivate()
+        response = self.client.get(reverse("order_create"), {"patient": active.pk})
+        self.assertContains(response, 'value="Aetna"')
+        self.assertContains(response, 'value="AET-558812"')
+        response = self.client.get(reverse("order_create"), {"patient": removed.pk})
+        self.assertNotContains(response, 'value="HUM-610284"')
+
+    def test_patient_dropdown_is_labelled_and_a_bad_patient_in_url_is_ignored(self):
+        self.add_patient()
+        for query in ({}, {"patient": "abc"}, {"patient": "²"}, {"patient": "99999999999999999999999"}):
+            with self.subTest(query=query):
+                response = self.client.get(reverse("order_create"), query)
+                self.assertContains(response, "Search for a patient")
+                self.assertContains(response, "born 1990-05-17")
+
+    def test_both_forms_suggest_stored_providers_and_self_pay(self):
+        self.add_patient(insurance_provider="Aetna")
+        self.add_order(insurance_provider="Cigna")
+        for name in ("order_create", "patient_create"):
+            response = self.client.get(reverse(name))
+            for provider in ("Aetna", "Cigna", "SELF-PAY"):
+                with self.subTest(form=name, provider=provider):
+                    self.assertContains(response, f'<option value="{provider}">')
 
     def test_removed_patient_cannot_be_ordered_for(self):
         patient = self.add_patient()
@@ -319,8 +386,16 @@ class OrderViewTests(TestCase):
         self.assertContains(self.client.get(reverse("order_list"), {"page": 2}), oldest_url)
 
     def test_detail_shows_whole_order_even_if_patient_was_removed(self):
-        order = self.add_order(codes=("BMP", "LIPID"), physician_phone="520-555-0199")
+        order = self.add_order(
+            codes=("BMP", "LIPID"),
+            physician_phone="520-555-0199",
+            insurance_provider="Cigna",
+            insurance_policy_number="CIG-330945",
+        )
         order.patient.deactivate()
         response = self.client.get(reverse("order_detail", args=[order.pk]))
-        for text in ("Dr. Ana Patel", "AZ-12345", "520-555-0199", "tech", "Doe, Jane", "Basic metabolic panel", "Lipid panel"):
+        for text in (
+            "Dr. Ana Patel", "AZ-12345", "520-555-0199", "Cigna", "CIG-330945", "tech", "Doe, Jane",
+            "Basic metabolic panel", "Lipid panel",
+        ):
             self.assertContains(response, text)
