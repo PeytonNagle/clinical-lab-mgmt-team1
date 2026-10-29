@@ -55,12 +55,18 @@
                         {% include "lab/_order_field.html" with field=form.physician_phone %}
                     </div>
 
-                    <h2 class="h6 text-uppercase text-muted mt-4">Insurance</h2>
+                    <h2 class="h6 text-uppercase text-muted mt-4">
+                        Insurance
+                        <span class="d-inline-flex align-items-center justify-content-center rounded-circle border text-lowercase fw-bold ms-1"
+                              style="width: 1.15rem; height: 1.15rem; font-size: .7rem; cursor: help;"
+                              tabindex="0" role="img" aria-label="Help: patients with no insurance"
+                              data-bs-toggle="tooltip" data-bs-title="No insurance? Enter SELF-PAY in both boxes.">i</span>
+                    </h2>
                     <div class="row">
                         {% include "lab/_order_field.html" with field=form.insurance_provider %}
                         {% include "lab/_order_field.html" with field=form.insurance_policy_number %}
                     </div>
-                    <p class="form-text">Filled in from the patient. Change it if this order uses different insurance. Enter SELF-PAY if there is none.</p>
+                    <p class="form-text">Filled in from the patient. Change it if this order uses different insurance.</p>
 
                     <div class="d-flex gap-2">
                         <button type="submit" class="btn btn-primary">Place order</button>
