@@ -3,6 +3,7 @@ from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
 
 from .models import SELF_PAY, Patient, TestOrder, TestType
+from .phone import PhoneField
 
 
 class DatalistInput(forms.TextInput):
@@ -62,6 +63,7 @@ class PatientForm(forms.ModelForm):
             "date_of_birth": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
             **INSURANCE_WIDGETS,
         }
+        field_classes = {"phone": PhoneField}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -93,6 +95,7 @@ class TestOrderForm(forms.ModelForm):
             "tests": forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"}),
             **INSURANCE_WIDGETS,
         }
+        field_classes = {"physician_phone": PhoneField}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

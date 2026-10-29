@@ -3,3 +3,4 @@ psycopg[binary]
 django-environ
 pytest
 pytest-django
+phonenumbers

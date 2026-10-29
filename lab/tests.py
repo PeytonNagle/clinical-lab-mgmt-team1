@@ -1,13 +1,14 @@
 from datetime import date, timedelta
 
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from core.models import User
 
 from .models import Patient, TestOrder, TestType
+from .phone import normalize_phone
 
 
 def make_patient(**overrides):
@@ -62,6 +63,22 @@ PATIENT_FORM_DATA = {
 }
 
 
+class NormalizePhoneTests(SimpleTestCase):
+    def test_every_accepted_format_becomes_the_recommended_one(self):
+        for typed in ["5205550142", "520-555-0142", "(520) 555-0142", "520.555.0142", " 520 555 0142 ", "+1 520 555 0142", "1-520-555-0142"]:
+            with self.subTest(typed=typed):
+                self.assertEqual(normalize_phone(typed), "520-555-0142")
+
+    def test_a_number_with_another_country_code_is_kept_as_plus_digits(self):
+        self.assertEqual(normalize_phone("+44 20 7946 0958"), "+442079460958")
+
+    def test_numbers_that_cannot_be_read_are_rejected(self):
+        for typed in ["call me", "520-555-014", "520-555-0142 x12", "+1 520 555 014", "25205550142", "+0123456789", "+5203732222", "５２０５５５０１４２"]:
+            with self.subTest(typed=typed):
+                with self.assertRaises(ValidationError):
+                    normalize_phone(typed)
+
+
 class PatientViewTests(TestCase):
     def login_as(self, role):
         user = User.objects.create_user(
@@ -93,6 +110,14 @@ class PatientViewTests(TestCase):
         response = self.client.post(reverse("patient_create"), data)
         self.assertEqual(list(response.context["form"].errors), ["insurance_policy_number"])
         self.assertFalse(Patient.objects.exists())
+
+    def test_patient_phone_is_cleaned_and_an_unreadable_one_is_rejected(self):
+        self.login_as(User.Role.CASHIER)
+        self.client.post(reverse("patient_create"), {**PATIENT_FORM_DATA, "phone": "(520) 555 0142"})
+        self.assertEqual(Patient.objects.get().phone, "520-555-0142")
+        response = self.client.post(reverse("patient_create"), {**PATIENT_FORM_DATA, "phone": "call me"})
+        self.assertEqual(list(response.context["form"].errors), ["phone"])
+        self.assertEqual(Patient.objects.count(), 1)
 
     def test_cashier_updates_patient(self):
         self.login_as(User.Role.CASHIER)
@@ -130,6 +155,15 @@ class PatientViewTests(TestCase):
         make_patient(first_name="Carlos", last_name="Garcia").save()
         response = self.client.get(reverse("patient_list"), {"q": "garc"})
         self.assertEqual([p.last_name for p in response.context["patients"]], ["Garcia"])
+
+    def test_list_search_finds_a_phone_however_it_is_typed(self):
+        self.login_as(User.Role.CASHIER)
+        make_patient(first_name="Jane", phone="520-555-0142").save()
+        make_patient(first_name="Carlos", phone="520-555-0199").save()
+        for query in ["5205550142", "(520) 555 0142", "5550142"]:
+            with self.subTest(query=query):
+                response = self.client.get(reverse("patient_list"), {"q": query})
+                self.assertEqual([p.first_name for p in response.context["patients"]], ["Jane"])
 
     def test_technician_can_create_but_not_remove(self):
         self.login_as(User.Role.TECHNICIAN)
@@ -246,7 +280,7 @@ class OrderViewTests(TestCase):
             "tests": list(TestType.objects.filter(code__in=["BMP", "LIPID"]).values_list("pk", flat=True)),
             "physician_name": "Dr. Ana Patel",
             "physician_license_id": "  az-12345 ",
-            "physician_phone": "",
+            "physician_phone": " (520) 555-0199 ",
             "insurance_provider": "  Aetna ",
             "insurance_policy_number": " AET-558812 ",
         }
@@ -264,14 +298,35 @@ class OrderViewTests(TestCase):
         self.assertEqual(order.status, TestOrder.Status.PENDING)
         self.assertEqual(order.source, TestOrder.Source.PHONE_IN)
         self.assertEqual(order.physician_license_id, "AZ-12345")
+        self.assertEqual(order.physician_phone, "520-555-0199")
         self.assertEqual((order.insurance_provider, order.insurance_policy_number), ("Aetna", "AET-558812"))
         self.assertEqual(sorted(order.tests.values_list("code", flat=True)), ["BMP", "LIPID"])
 
-    def test_order_with_no_tests_is_rejected(self):
-        response = self.client.post(reverse("order_create"), self.form_data(self.add_patient(), tests=[]))
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("tests", response.context["form"].errors)
+    def test_each_required_field_is_enforced_and_nothing_is_saved(self):
+        patient = self.add_patient()
+        blanks = {
+            "patient": "",
+            "source": "",
+            "tests": [],
+            "physician_name": "   ",
+            "physician_license_id": "   ",
+            "insurance_provider": "   ",
+            "insurance_policy_number": "   ",
+        }
+        for field, blank in blanks.items():
+            with self.subTest(field=field):
+                data = {**self.form_data(patient), field: blank}
+                response = self.client.post(reverse("order_create"), data)
+                self.assertEqual(list(response.context["form"].errors), [field])
         self.assertFalse(TestOrder.objects.exists())
+
+    def test_physician_phone_is_optional_but_must_be_readable_if_given(self):
+        patient = self.add_patient()
+        self.client.post(reverse("order_create"), self.form_data(patient, physician_phone=""))
+        self.assertEqual(TestOrder.objects.get().physician_phone, "")
+        response = self.client.post(reverse("order_create"), self.form_data(patient, physician_phone="call me"))
+        self.assertEqual(list(response.context["form"].errors), ["physician_phone"])
+        self.assertEqual(TestOrder.objects.count(), 1)
 
     def test_order_keeps_its_own_insurance_when_the_patient_changes_later(self):
         patient = self.add_patient()
@@ -282,17 +337,9 @@ class OrderViewTests(TestCase):
         order = TestOrder.objects.get()
         self.assertEqual((order.insurance_provider, order.insurance_policy_number), ("Cigna", "CIG-330945"))
 
-    def test_bad_insurance_is_rejected_on_its_own_field_and_nothing_is_saved(self):
-        patient = self.add_patient()
-        bad = [
-            ("insurance_provider", "   "),
-            ("insurance_policy_number", "   "),
-            ("insurance_policy_number", "AET 558812"),
-        ]
-        for field, value in bad:
-            with self.subTest(field=field, value=value):
-                response = self.client.post(reverse("order_create"), self.form_data(patient, **{field: value}))
-                self.assertEqual(list(response.context["form"].errors), [field])
+    def test_policy_number_with_a_space_is_rejected_on_its_own_field(self):
+        response = self.client.post(reverse("order_create"), self.form_data(self.add_patient(), insurance_policy_number="AET 558812"))
+        self.assertEqual(list(response.context["form"].errors), ["insurance_policy_number"])
         self.assertFalse(TestOrder.objects.exists())
 
     def test_self_pay_is_accepted_in_both_insurance_fields(self):
