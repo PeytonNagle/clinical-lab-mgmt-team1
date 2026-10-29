@@ -88,14 +88,7 @@ def order_create(request):
             form.save_m2m()
         messages.success(request, f"Order #{order.pk} created for {order.patient}.")
         return redirect("order_list")
-    # Each active patient's insurance, so picking a patient can fill in the insurance boxes.
-    insurance = {
-        pk: [provider, policy]
-        for pk, provider, policy in form.fields["patient"].queryset.values_list(
-            "pk", "insurance_provider", "insurance_policy_number"
-        )
-    }
-    return render(request, "lab/order_form.html", {"form": form, "patient_insurance": insurance})
+    return render(request, "lab/order_form.html", {"form": form})
 
 
 @role_required(*STAFF_ROLES)

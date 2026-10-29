@@ -1,5 +1,5 @@
 from django import forms
-from django.core.exceptions import ValidationError
+from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
 
 from .models import SELF_PAY, Patient, TestOrder, TestType
@@ -21,12 +21,20 @@ class DatalistInput(forms.TextInput):
 
 def provider_names():
     """Insurers already on file, so one insurer isn't typed several ways, plus the no-insurance value."""
-    names = set(Patient.objects.values_list("insurance_provider", flat=True))
-    names |= set(TestOrder.objects.values_list("insurance_provider", flat=True))
-    return sorted(names | {SELF_PAY}, key=str.lower)
+    names = {SELF_PAY}
+    for model in (Patient, TestOrder):
+        # order_by() clears the model's default ordering, which would otherwise defeat distinct().
+        names.update(model.objects.order_by().values_list("insurance_provider", flat=True).distinct())
+    return sorted(names, key=str.lower)
 
 
-# Used by both the patient form and the order form.
+def add_bootstrap_classes(form):
+    """Dropdowns use form-select, everything else form-control. A widget that already has a class keeps it."""
+    for field in form.fields.values():
+        if "class" not in field.widget.attrs:
+            field.widget.attrs["class"] = "form-select" if isinstance(field.widget, forms.Select) else "form-control"
+
+
 INSURANCE_WIDGETS = {
     "insurance_provider": DatalistInput(provider_names),
     "insurance_policy_number": DatalistInput(lambda: [SELF_PAY]),
@@ -57,10 +65,7 @@ class PatientForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Bootstrap styling: dropdowns use form-select, everything else form-control.
-        for field in self.fields.values():
-            css = "form-select" if isinstance(field.widget, forms.Select) else "form-control"
-            field.widget.attrs["class"] = css
+        add_bootstrap_classes(self)
 
 
 def patient_label(patient):
@@ -91,9 +96,7 @@ class TestOrderForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for name, field in self.fields.items():
-            if name not in ("source", "tests"):
-                field.widget.attrs["class"] = "form-select" if isinstance(field.widget, forms.Select) else "form-control"
+        add_bootstrap_classes(self)
         # Radio buttons have no "---------" choice; the model field has no default, so one must be picked.
         self.fields["source"].choices = TestOrder.Source.choices
         self.fields["tests"].label_from_instance = lambda test: f"{test.code}  {test.name}"
@@ -104,10 +107,14 @@ class TestOrderForm(forms.ModelForm):
         patient_field.empty_label = "Search for a patient"
 
         if not self.is_bound:
-            # Opened from a patient row (?patient=): start with that patient's insurance.
-            try:
-                patient = patient_field.clean(self.initial.get("patient"))
-            except ValidationError:
-                return
-            self.initial["insurance_provider"] = patient.insurance_provider
-            self.initial["insurance_policy_number"] = patient.insurance_policy_number
+            # Opened from a patient row (?patient=): start with that patient's insurance. Removed or bad ids miss.
+            insurance = self.patient_insurance.get(str(self.initial.get("patient")))
+            if insurance:
+                self.initial["insurance_provider"] = insurance["insurance_provider"]
+                self.initial["insurance_policy_number"] = insurance["insurance_policy_number"]
+
+    @cached_property
+    def patient_insurance(self):
+        """Active patients' insurance by id, used for the first fill and for the page script on pick."""
+        rows = self.fields["patient"].queryset.values("pk", "insurance_provider", "insurance_policy_number")
+        return {str(row["pk"]): row for row in rows}

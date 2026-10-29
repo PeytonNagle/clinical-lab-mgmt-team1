@@ -82,7 +82,7 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.4.3/dist/js/tom-select.complete.min.js"
         integrity="sha384-A4TlP4zHVPP9oVIQ8pTVaV6MhvBkDx1sRpmEUfAlO5e7xpodrdr6uNmUV7alXAWW" crossorigin="anonymous"></script>
-{{ patient_insurance|json_script:"patient-insurance" }}
+{{ form.patient_insurance|json_script:"patient-insurance" }}
 <script>
     // Turns the patient dropdown into a box you can type in to narrow the list.
     const patient = new TomSelect("#{{ form.patient.id_for_label }}");
@@ -90,8 +90,8 @@
     // Picking a patient replaces the insurance boxes with that patient's.
     patient.on("change", (pk) => {
         if (!insurance[pk]) return;
-        document.getElementById("{{ form.insurance_provider.id_for_label }}").value = insurance[pk][0];
-        document.getElementById("{{ form.insurance_policy_number.id_for_label }}").value = insurance[pk][1];
+        document.getElementById("{{ form.insurance_provider.id_for_label }}").value = insurance[pk].insurance_provider;
+        document.getElementById("{{ form.insurance_policy_number.id_for_label }}").value = insurance[pk].insurance_policy_number;
     });
 </script>
 {% endblock %}

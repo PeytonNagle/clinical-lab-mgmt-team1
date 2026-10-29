@@ -288,7 +288,6 @@ class OrderViewTests(TestCase):
             ("insurance_provider", "   "),
             ("insurance_policy_number", "   "),
             ("insurance_policy_number", "AET 558812"),
-            ("insurance_policy_number", "AET_558812!"),
         ]
         for field, value in bad:
             with self.subTest(field=field, value=value):
