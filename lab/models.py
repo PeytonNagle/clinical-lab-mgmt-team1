@@ -1,7 +1,14 @@
 from decimal import Decimal
 
 from django.conf import settings
+from django.core.validators import RegexValidator
 from django.db import models
+
+# What staff enter when a patient has no insurance. It passes the policy number rule below.
+SELF_PAY = "SELF-PAY"
+
+# Shared by the patient and the order, so a patient can't be saved with a number the order form would reject.
+policy_number_validator = RegexValidator(r"\A[A-Za-z0-9-]+\Z", "Use letters, numbers and hyphens only.")
 
 
 class Patient(models.Model):
@@ -29,7 +36,7 @@ class Patient(models.Model):
     # Home/mailing address on a single line.
     address = models.CharField(max_length=255)
 
-    # Contact phone number, stored as text so it can keep "+", spaces, and dashes.
+    # Contact phone number, saved as 520-555-0101 (or +digits abroad) by the form; see phone.py.
     phone = models.CharField(max_length=20)
 
     # Optional: not every patient has an email. blank=True lets forms leave it empty.
@@ -39,7 +46,7 @@ class Patient(models.Model):
     insurance_provider = models.CharField(max_length=100)
 
     # Patient's policy/member number with that insurer.
-    insurance_policy_number = models.CharField(max_length=50)
+    insurance_policy_number = models.CharField(max_length=50, validators=[policy_number_validator])
 
     # "Soft delete" flag: removing a patient sets this to False instead of deleting the row,
     # so their history (orders, results, bills) is kept.
@@ -104,6 +111,11 @@ class TestOrder(models.Model):
 
     # Optional: the physician's contact number.
     physician_phone = models.CharField(max_length=20, blank=True)
+
+    # Insurance as it was when the order was placed, copied from the patient and correctable per order.
+    # Later edits to the patient's insurance do not change past orders.
+    insurance_provider = models.CharField(max_length=100)
+    insurance_policy_number = models.CharField(max_length=50, validators=[policy_number_validator])
 
     # Staff member who entered the order. PROTECT keeps that record when an account is removed.
     entered_by = models.ForeignKey(

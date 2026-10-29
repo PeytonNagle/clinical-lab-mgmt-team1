@@ -35,6 +35,7 @@
                             <td>{{ patient.phone }}</td>
                             <td>{{ patient.insurance_provider }} &middot; {{ patient.insurance_policy_number }}</td>
                             <td class="text-end text-nowrap">
+                                <a class="btn btn-sm btn-outline-primary" href="{% url 'order_create' %}?patient={{ patient.pk }}">Order test</a>
                                 <a class="btn btn-sm btn-outline-secondary" href="{% url 'patient_update' patient.pk %}">Edit</a>
                                 {% if can_remove %}
                                     <a class="btn btn-sm btn-outline-danger" href="{% url 'patient_remove' patient.pk %}">Remove</a>

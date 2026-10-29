@@ -9,7 +9,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python manage.py migrate
-python manage.py seed      # fake users and patients; safe to re-run
+python manage.py seed      # fake users, patients and orders; safe to re-run
 python manage.py runserver # http://127.0.0.1:8000/
 ```
 
@@ -76,6 +76,10 @@ Every page requires login except the login page.
 | `/patients/new/`   | Create a patient account (any staff role)                            |
 | `/patients/<id>/edit/` | Update a patient account (any staff role)                        |
 | `/patients/<id>/remove/` | Remove (deactivate) a patient: lab manager, specimen collector, or cashier |
+| `/orders/`         | Order list, newest first, 25 per page; any staff role. Also linked in the navbar |
+| `/orders/new/`     | Place a test order, with insurance filled in from the patient (any staff role) |
+| `/orders/<id>/`    | Order detail: patient, physician, insurance and tests                |
+| `/staff/register/` | Create a staff account (lab manager only)                            |
 | `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
 | `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
 

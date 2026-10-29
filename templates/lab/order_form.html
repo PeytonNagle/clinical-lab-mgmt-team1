@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}New order | CLMS{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.4.3/dist/css/tom-select.bootstrap5.min.css"
+      integrity="sha384-oNaL7h8UJDHZ8k9XxysQRnqKxysB2lmlq7uU5Ic9CsOy89U4US8mT9pGYFf0ygyM" crossorigin="anonymous">
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-3">New order</h1>
+
+                <form method="post" novalidate>
+                    {% csrf_token %}
+                    {% for error in form.non_field_errors %}
+                        <div class="alert alert-danger">{{ error }}</div>
+                    {% endfor %}
+
+                    <div class="mb-3">
+                        <label class="form-label" for="{{ form.patient.id_for_label }}">Patient</label>
+                        {{ form.patient }}
+                        {% for error in form.patient.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                    </div>
+
+                    <fieldset class="mb-3">
+                        <legend class="form-label fs-6">How it came in</legend>
+                        {% for choice in form.source %}
+                            <div class="form-check form-check-inline">
+                                {{ choice.tag }}
+                                <label class="form-check-label" for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label>
+                            </div>
+                        {% endfor %}
+                        {% for error in form.source.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                    </fieldset>
+
+                    <fieldset class="mb-3">
+                        <legend class="form-label fs-6">Tests</legend>
+                        {% for choice in form.tests %}
+                            <div class="form-check">
+                                {{ choice.tag }}
+                                <label class="form-check-label" for="{{ choice.id_for_label }}">{{ choice.choice_label }}</label>
+                            </div>
+                        {% endfor %}
+                        {% for error in form.tests.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                    </fieldset>
+
+                    <h2 class="h6 text-uppercase text-muted mt-4">Ordering physician</h2>
+                    <div class="row">
+                        {% include "lab/_order_field.html" with field=form.physician_name %}
+                        {% include "lab/_order_field.html" with field=form.physician_license_id %}
+                        {% include "lab/_order_field.html" with field=form.physician_phone %}
+                    </div>
+
+                    <h2 class="h6 text-uppercase text-muted mt-4">
+                        Insurance
+                        <span class="d-inline-flex align-items-center justify-content-center rounded-circle border text-lowercase fw-bold ms-1"
+                              style="width: 1.15rem; height: 1.15rem; font-size: .7rem; cursor: help;"
+                              tabindex="0" role="img" aria-label="Help: patients with no insurance"
+                              data-bs-toggle="tooltip" data-bs-title="No insurance? Enter SELF-PAY in both boxes.">i</span>
+                    </h2>
+                    <div class="row">
+                        {% include "lab/_order_field.html" with field=form.insurance_provider %}
+                        {% include "lab/_order_field.html" with field=form.insurance_policy_number %}
+                    </div>
+                    <p class="form-text">Filled in from the patient. Change it if this order uses different insurance.</p>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">Place order</button>
+                        <a class="btn btn-outline-secondary" href="{% url 'order_list' %}">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.4.3/dist/js/tom-select.complete.min.js"
+        integrity="sha384-A4TlP4zHVPP9oVIQ8pTVaV6MhvBkDx1sRpmEUfAlO5e7xpodrdr6uNmUV7alXAWW" crossorigin="anonymous"></script>
+{{ form.patient_insurance|json_script:"patient-insurance" }}
+<script>
+    // Turns the patient dropdown into a box you can type in to narrow the list.
+    const patient = new TomSelect("#{{ form.patient.id_for_label }}");
+    const insurance = JSON.parse(document.getElementById("patient-insurance").textContent);
+    // Picking a patient replaces the insurance boxes with that patient's.
+    patient.on("change", (pk) => {
+        if (!insurance[pk]) return;
+        document.getElementById("{{ form.insurance_provider.id_for_label }}").value = insurance[pk].insurance_provider;
+        document.getElementById("{{ form.insurance_policy_number.id_for_label }}").value = insurance[pk].insurance_policy_number;
+    });
+</script>
+{% endblock %}

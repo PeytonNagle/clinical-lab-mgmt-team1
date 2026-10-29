@@ -1,13 +1,16 @@
+from datetime import timedelta
 from io import StringIO
 
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import CommandError, call_command
 from django.template import RequestContext, Template
 from django.test import RequestFactory, TestCase
+from django.utils import timezone
 
 from lab.models import Patient
 
-from .models import User
+from .models import ActivityLog, User
+from .utils import log_event
 
 
 class UserModelTests(TestCase):
@@ -213,3 +216,40 @@ class StaffRegistrationTests(TestCase):
         self.assertFalse(
             User.objects.filter(username="newtech").exists()
         )
+
+class ActivityLogTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="tech1", role=User.Role.TECHNICIAN)
+        self.patient = Patient.objects.create(
+            first_name="Jane", last_name="Doe", date_of_birth="1990-01-01",
+            gender=Patient.Gender.FEMALE, address="1 Main St", phone="555-0100",
+            insurance_provider="Acme", insurance_policy_number="P-1",
+        )
+
+    def test_log_event_saves_user_action_patient_and_details(self):
+        entry = log_event(self.user, "order_created", patient=self.patient, details="Order 1")
+
+        self.assertEqual(ActivityLog.objects.count(), 1)
+        saved = ActivityLog.objects.get()
+        self.assertEqual(saved, entry)
+        self.assertEqual(saved.user, self.user)
+        self.assertEqual(saved.action, "order_created")
+        self.assertEqual(saved.patient, self.patient)
+        self.assertEqual(saved.details, "Order 1")
+
+    def test_log_event_without_patient(self):
+        entry = log_event(self.user, "results_imported")
+        self.assertIsNone(entry.patient)
+        self.assertEqual(entry.details, "")
+
+    def test_anonymous_user_is_saved_as_none(self):
+        entry = log_event(AnonymousUser(), "login_failed")
+        self.assertIsNone(entry.user)
+
+    def test_entries_come_back_newest_first(self):
+        old = log_event(self.user, "first")
+        new = log_event(self.user, "second")
+        # Both rows can share a timestamp within one test, so push the first one into the past.
+        ActivityLog.objects.filter(pk=old.pk).update(timestamp=timezone.now() - timedelta(minutes=5))
+
+        self.assertEqual(list(ActivityLog.objects.all()), [new, old])

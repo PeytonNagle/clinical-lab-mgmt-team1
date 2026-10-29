@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('lab', '0003_seed_test_types'),
+        ('lab', '0005_clean_phone_numbers'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
