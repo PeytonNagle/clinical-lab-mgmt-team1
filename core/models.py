@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
@@ -36,3 +37,33 @@ STAFF_ROLES = {
     User.Role.PATHOLOGIST,
     User.Role.CASHIER,
 }
+
+
+class ActivityLog(models.Model):
+    """One entry in the audit trail: who did what, to which patient, and when."""
+
+    # Who performed the action. Empty for system events; SET_NULL keeps the entry if the account is removed.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
+    )
+
+    # The patient the action concerns, if any. SET_NULL keeps the entry if the patient row is removed.
+    patient = models.ForeignKey(
+        "lab.Patient", null=True, blank=True, on_delete=models.SET_NULL, related_name="activity_logs"
+    )
+
+    # Short machine-friendly name of what happened, e.g. "order_created" or "results_imported".
+    action = models.CharField(max_length=50)
+
+    # Optional free-text description with extra context.
+    details = models.TextField(blank=True)
+
+    # Set once when the entry is created.
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Newest first.
+        ordering = ["-timestamp"]
+
+    def __str__(self):
+        return f"{self.timestamp:%Y-%m-%d %H:%M} - {self.user or 'system'} - {self.action}"
