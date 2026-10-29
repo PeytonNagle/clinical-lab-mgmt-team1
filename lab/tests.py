@@ -73,7 +73,7 @@ class NormalizePhoneTests(SimpleTestCase):
         self.assertEqual(normalize_phone("+44 20 7946 0958"), "+442079460958")
 
     def test_numbers_that_cannot_be_read_are_rejected(self):
-        for typed in ["call me", "520-555-014", "520-555-0142 x12", "+1 520 555 014", "25205550142", "+0123456789", "５２０５５５０１４２"]:
+        for typed in ["call me", "520-555-014", "520-555-0142 x12", "+1 520 555 014", "25205550142", "+0123456789", "+5203732222", "５２０５５５０１４２"]:
             with self.subTest(typed=typed):
                 with self.assertRaises(ValidationError):
                     normalize_phone(typed)

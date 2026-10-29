@@ -1,12 +1,13 @@
 import re
 
+import phonenumbers
 from django import forms
 from django.core.exceptions import ValidationError
 
-# Digits plus the usual separators; a leading + marks a country code.
+# Digits and the usual separators only. This keeps out letters (the library would turn them into digits) and extensions.
 _READABLE = re.compile(r"\A\+?[0-9\s().-]+\Z")
 
-_ERROR = "Enter a 10-digit US phone number like 520-555-0101, or start with + and the country code."
+_ERROR = "Enter a valid phone number like 520-555-0101. For a number outside the US, start with + and the country code."
 
 
 def phone_digits(text):
@@ -15,21 +16,20 @@ def phone_digits(text):
 
 
 def normalize_phone(value):
-    """Return the number as 520-555-0101 (US is assumed) or +<digits> for another country; raise if unreadable."""
+    """Return a real number as 520-555-0101 (US is assumed) or +<digits> for another country; raise if not."""
     value = value.strip()
-    digits = phone_digits(value)
-    if not digits:
+    if not phone_digits(value):
         raise ValidationError(_ERROR)
-    if len(digits) == 11 and digits[0] == "1":
-        digits = digits[1:]
-    elif value.startswith("+"):
-        # Country code 1 is the US and needs exactly 11 digits; no country code starts with 0.
-        if 8 <= len(digits) <= 15 and digits[0] in "23456789":
-            return "+" + digits
+    try:
+        number = phonenumbers.parse(value, "US")
+    except phonenumbers.NumberParseException:
         raise ValidationError(_ERROR)
-    if len(digits) == 10:
+    if not phonenumbers.is_valid_number(number):
+        raise ValidationError(_ERROR)
+    if number.country_code == 1:
+        digits = str(number.national_number)
         return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
-    raise ValidationError(_ERROR)
+    return phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164)
 
 
 class PhoneField(forms.CharField):
