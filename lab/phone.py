@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 # Digits plus the usual separators; a leading + marks a country code.
 _READABLE = re.compile(r"\A\+?[0-9\s().-]+\Z")
 
-ERROR = "Enter a 10-digit US phone number like 520-555-0101, or start with + and the country code."
+_ERROR = "Enter a 10-digit US phone number like 520-555-0101, or start with + and the country code."
 
 
 def phone_digits(text):
@@ -19,18 +19,17 @@ def normalize_phone(value):
     value = value.strip()
     digits = phone_digits(value)
     if not digits:
-        raise ValidationError(ERROR)
-    plus = value.startswith("+")
+        raise ValidationError(_ERROR)
     if len(digits) == 11 and digits[0] == "1":
         digits = digits[1:]
-    elif plus and 8 <= len(digits) <= 15 and digits[0] in "23456789":
-        return "+" + digits
-    elif plus:
+    elif value.startswith("+"):
         # Country code 1 is the US and needs exactly 11 digits; no country code starts with 0.
-        raise ValidationError(ERROR)
+        if 8 <= len(digits) <= 15 and digits[0] in "23456789":
+            return "+" + digits
+        raise ValidationError(_ERROR)
     if len(digits) == 10:
         return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
-    raise ValidationError(ERROR)
+    raise ValidationError(_ERROR)
 
 
 class PhoneField(forms.CharField):

@@ -9,11 +9,12 @@ def clean_phone_numbers(apps, schema_editor):
     for model, field in (("Patient", "phone"), ("TestOrder", "physician_phone")):
         Model = apps.get_model("lab", model)
         for row in Model.objects.exclude(**{field: ""}):
+            old = getattr(row, field)
             try:
-                cleaned = normalize_phone(getattr(row, field))
+                cleaned = normalize_phone(old)
             except ValidationError:
                 continue
-            if cleaned != getattr(row, field):
+            if cleaned != old:
                 setattr(row, field, cleaned)
                 row.save(update_fields=[field])
 

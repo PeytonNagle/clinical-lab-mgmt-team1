@@ -39,8 +39,8 @@ def patient_list(request):
         # Numbers are saved with dashes, so also compare digits to find them however the query is typed.
         digits = phone_digits(query)
         if digits:
-            patients = patients.annotate(phone_digits=Replace("phone", Value("-"), Value("")))
-            match |= Q(phone_digits__contains=digits)
+            patients = patients.annotate(phone_plain=Replace("phone", Value("-"), Value("")))
+            match |= Q(phone_plain__contains=digits)
         patients = patients.filter(match)
     return render(
         request,
