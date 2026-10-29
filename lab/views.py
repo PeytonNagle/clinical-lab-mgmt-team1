@@ -1,7 +1,8 @@
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Value
+from django.db.models.functions import Replace
 from django.shortcuts import get_object_or_404, redirect, render
 
 from core.decorators import role_required
@@ -9,6 +10,7 @@ from core.models import STAFF_ROLES, User
 
 from .forms import PatientForm, TestOrderForm
 from .models import Patient, TestOrder
+from .phone import phone_digits
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
 # Cashiers are added by change request for backlog item 5.
@@ -28,12 +30,18 @@ def patient_list(request):
     query = request.GET.get("q", "").strip()
     patients = Patient.objects.filter(is_active=True)
     if query:
-        patients = patients.filter(
+        match = (
             Q(first_name__icontains=query)
             | Q(last_name__icontains=query)
             | Q(phone__icontains=query)
             | Q(insurance_policy_number__icontains=query)
         )
+        # Numbers are saved with dashes, so also compare digits to find them however the query is typed.
+        digits = phone_digits(query)
+        if digits:
+            patients = patients.annotate(phone_digits=Replace("phone", Value("-"), Value("")))
+            match |= Q(phone_digits__contains=digits)
+        patients = patients.filter(match)
     return render(
         request,
         "lab/patient_list.html",
