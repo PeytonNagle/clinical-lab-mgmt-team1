@@ -34,7 +34,7 @@ class Patient(models.Model):
     # Home/mailing address on a single line.
     address = models.CharField(max_length=255)
 
-    # Contact phone number, stored as text so it can keep "+", spaces, and dashes.
+    # Contact phone number, saved as 520-555-0101 (or +digits abroad) by the form; see phone.py.
     phone = models.CharField(max_length=20)
 
     # Optional: not every patient has an email. blank=True lets forms leave it empty.
