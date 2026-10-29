@@ -30,3 +30,26 @@ class PatientForm(forms.ModelForm):
         for field in self.fields.values():
             css = "form-select" if isinstance(field.widget, forms.Select) else "form-control"
             field.widget.attrs["class"] = css
+
+
+class ResultUploadForm(forms.Form):
+    """A machine result .txt file uploaded by a technician."""
+
+    # Plenty for a day of synthetic results; stops someone uploading something huge by mistake.
+    MAX_SIZE = 1024 * 1024
+
+    file = forms.FileField(
+        label="Result file (.txt)",
+        widget=forms.ClearableFileInput(attrs={"class": "form-control", "accept": ".txt"}),
+    )
+
+    def clean_file(self):
+        upload = self.cleaned_data["file"]
+        if not upload.name.lower().endswith(".txt"):
+            raise forms.ValidationError("Upload a .txt file.")
+        if upload.size > self.MAX_SIZE:
+            raise forms.ValidationError("The file is larger than 1 MB.")
+        try:
+            return upload.read().decode("utf-8")
+        except UnicodeDecodeError:
+            raise forms.ValidationError("The file is not plain text.")

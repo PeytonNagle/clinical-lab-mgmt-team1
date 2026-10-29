@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Upload results | CLMS{% endblock %}
+
+{% block content %}
+    <h1 class="h3 mb-3">Upload machine results</h1>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body p-4">
+            <p class="text-muted">
+                Upload a result .txt file from the chemistry or hematology analyzer. Each line looks like
+                <code>ORDER ID|Test^GLU^Glucose|92|202610211340</code>.
+            </p>
+            <form method="post" enctype="multipart/form-data" novalidate>
+                {% csrf_token %}
+                <div class="mb-3">
+                    <label class="form-label" for="{{ form.file.id_for_label }}">{{ form.file.label }}</label>
+                    {{ form.file }}
+                    {% for error in form.file.errors %}
+                        <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor %}
+                </div>
+                <button type="submit" class="btn btn-primary">Upload</button>
+            </form>
+        </div>
+    </div>
+
+    {% if report %}
+        <h2 class="h5">Saved ({{ report.saved|length }})</h2>
+        {% for result in report.saved %}
+            <div class="card shadow-sm mb-3">
+                <div class="card-header">
+                    Order {{ result.order_id }} &middot; {{ result.patient }} &middot; {{ result.TEST_CODE }}
+                </div>
+                <table class="table table-sm mb-0 align-middle">
+                    <thead>
+                        <tr><th>Test</th><th>Value</th><th>Units</th><th>Normal range</th><th>Flag</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for analyte, value, flag in result.rows %}
+                            <tr{% if flag %} class="table-warning"{% endif %}>
+                                <td>{{ analyte.label }}</td>
+                                <td>{{ value }}</td>
+                                <td>{{ analyte.units }}</td>
+                                <td>{{ analyte.range_display }}</td>
+                                <td>{% if flag == "L" %}Low{% elif flag == "H" %}High{% endif %}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% empty %}
+            <p class="text-muted">Nothing was saved.</p>
+        {% endfor %}
+
+        {% if report.rejected %}
+            <h2 class="h5 mt-4">Rejected ({{ report.rejected|length }})</h2>
+            <ul class="list-group mb-4">
+                {% for where, reason in report.rejected %}
+                    <li class="list-group-item list-group-item-danger"><strong>{{ where }}:</strong> {{ reason }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    {% endif %}
+{% endblock %}

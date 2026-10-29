@@ -76,6 +76,7 @@ Every page requires login except the login page.
 | `/patients/new/`   | Create a patient account (any staff role)                            |
 | `/patients/<id>/edit/` | Update a patient account (any staff role)                        |
 | `/patients/<id>/remove/` | Remove (deactivate) a patient: lab manager, specimen collector, or cashier |
+| `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
 | `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
 
 ## Rules

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Patient, TestOrder, TestType
+from .models import BMPResult, CBCResult, LipidResult, Patient, TestOrder, TestType
 
 
 @admin.register(Patient)
@@ -35,3 +35,10 @@ class TestOrderAdmin(admin.ModelAdmin):
     )
     filter_horizontal = ("tests",)
     readonly_fields = ("created_at",)
+
+
+@admin.register(BMPResult, CBCResult, LipidResult)
+class PanelResultAdmin(admin.ModelAdmin):
+    list_display = ("order", "performed_by", "measured_at", "received_at")
+    search_fields = ("order__id", "order__patient__last_name", "order__patient__first_name")
+    readonly_fields = ("received_at",)

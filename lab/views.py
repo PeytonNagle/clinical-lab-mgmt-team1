@@ -5,7 +5,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from core.decorators import role_required
 from core.models import STAFF_ROLES, User
 
-from .forms import PatientForm
+from .forms import PatientForm, ResultUploadForm
+from .importer import import_results
 from .models import Patient
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
@@ -70,3 +71,14 @@ def patient_remove(request, pk):
         messages.success(request, f"Patient {patient} removed.")
         return redirect("patient_list")
     return render(request, "lab/patient_confirm_remove.html", {"patient": patient})
+
+
+@role_required(User.Role.TECHNICIAN)
+def result_upload(request):
+    """Upload a machine result file; show what was saved and what was rejected and why."""
+    form = ResultUploadForm(request.POST or None, request.FILES or None)
+    report = None
+    if request.method == "POST" and form.is_valid():
+        report = import_results(form.cleaned_data["file"], request.user)
+        form = ResultUploadForm()
+    return render(request, "lab/result_upload.html", {"form": form, "report": report})

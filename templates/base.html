@@ -14,6 +14,9 @@
             {% if user.is_authenticated %}
                 <div class="d-flex align-items-center gap-2">
                     <a class="nav-link text-white me-2" href="{% url 'patient_list' %}">Patients</a>
+                    {% if user.role == "technician" %}
+                        <a class="nav-link text-white me-2" href="{% url 'result_upload' %}">Upload results</a>
+                    {% endif %}
                     <span class="navbar-text me-2">
                         {{ user.get_full_name|default:user.username }} &middot; {{ user.get_role_display }}
                     </span>

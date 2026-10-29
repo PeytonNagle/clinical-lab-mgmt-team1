@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
 
@@ -124,3 +126,130 @@ class TestOrder(models.Model):
     def save(self, *args, **kwargs):
         self.physician_license_id = self.physician_license_id.strip().upper()
         super().save(*args, **kwargs)
+
+
+class Analyte:
+    """One measured value on a panel: its machine Test ID, model field, units and normal range."""
+
+    def __init__(self, test_id, field, label, units, low=None, high=None):
+        self.test_id = test_id
+        self.field = field
+        self.label = label
+        self.units = units
+        # Normal range, inclusive. None means no limit on that side (e.g. HDL has no upper limit).
+        self.low = None if low is None else Decimal(str(low))
+        self.high = None if high is None else Decimal(str(high))
+
+    def range_display(self):
+        if self.low is None:
+            return f"≤ {self.high}"
+        if self.high is None:
+            return f"≥ {self.low}"
+        return f"{self.low}–{self.high}"
+
+    def flag(self, value):
+        """'L' below the normal range, 'H' above it, '' inside it."""
+        if self.low is not None and value < self.low:
+            return "L"
+        if self.high is not None and value > self.high:
+            return "H"
+        return ""
+
+
+def result_value_field():
+    return models.DecimalField(max_digits=8, decimal_places=2)
+
+
+class PanelResult(models.Model):
+    """Shared fields for one panel's results on one order. Each panel subclass adds its own values."""
+
+    # TestType.code this panel belongs to (BMP, CBC, LIPID). Set by each subclass.
+    TEST_CODE = None
+
+    # The values on this panel, in display order. Set by each subclass. Ranges are fixed adult ranges.
+    ANALYTES = []
+
+    # One result per panel per order. PROTECT keeps results when someone tries to hard-delete an order.
+    order = models.OneToOneField(TestOrder, on_delete=models.PROTECT, related_name="%(class)s")
+
+    # Technician who uploaded the machine file.
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="%(class)s_performed"
+    )
+
+    # When the machine produced the result (from the file).
+    measured_at = models.DateTimeField()
+
+    # When the result was saved in the system.
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+        ordering = ["-measured_at"]
+
+    def __str__(self):
+        return f"{self.TEST_CODE} result for order {self.order_id}"
+
+    @property
+    def patient(self):
+        return self.order.patient
+
+    @classmethod
+    def analyte_for(cls, test_id):
+        """The Analyte with this machine Test ID, or None if it's not on this panel."""
+        return next((a for a in cls.ANALYTES if a.test_id == test_id), None)
+
+    def rows(self):
+        """(analyte, value, flag) for each value, for templates and reports."""
+        return [(a, getattr(self, a.field), a.flag(getattr(self, a.field))) for a in self.ANALYTES]
+
+
+class BMPResult(PanelResult):
+    """Basic metabolic panel from the chemistry analyzer."""
+
+    TEST_CODE = "BMP"
+    ANALYTES = [
+        Analyte("GLU", "glucose", "Glucose", "mg/dL", 70, 99),
+        Analyte("NA", "sodium", "Sodium", "mmol/L", 135, 145),
+        Analyte("K", "potassium", "Potassium", "mmol/L", 3.5, 5.0),
+    ]
+
+    glucose = result_value_field()
+    sodium = result_value_field()
+    potassium = result_value_field()
+
+
+class CBCResult(PanelResult):
+    """Complete blood count from the hematology analyzer."""
+
+    TEST_CODE = "CBC"
+    ANALYTES = [
+        Analyte("WBC", "wbc", "White blood cells", "10^3/µL", 4.5, 11.0),
+        Analyte("HGB", "hemoglobin", "Hemoglobin", "g/dL", 12.0, 17.5),
+        Analyte("PLT", "platelets", "Platelets", "10^3/µL", 150, 450),
+    ]
+
+    wbc = result_value_field()
+    hemoglobin = result_value_field()
+    platelets = result_value_field()
+
+
+class LipidResult(PanelResult):
+    """Lipid panel from the chemistry analyzer."""
+
+    TEST_CODE = "LIPID"
+    ANALYTES = [
+        Analyte("CHOL", "total_cholesterol", "Total cholesterol", "mg/dL", high=199),
+        Analyte("HDL", "hdl", "HDL cholesterol", "mg/dL", low=40),
+        Analyte("LDL", "ldl", "LDL cholesterol", "mg/dL", high=99),
+        Analyte("TRIG", "triglycerides", "Triglycerides", "mg/dL", high=149),
+    ]
+
+    total_cholesterol = result_value_field()
+    hdl = result_value_field()
+    ldl = result_value_field()
+    triglycerides = result_value_field()
+
+
+# Every panel result model, keyed by TestType.code.
+PANEL_MODELS = {model.TEST_CODE: model for model in (BMPResult, CBCResult, LipidResult)}
