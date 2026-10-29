@@ -80,6 +80,7 @@ Every page requires login except the login page.
 | `/orders/new/`     | Place a test order, with insurance filled in from the patient (any staff role) |
 | `/orders/<id>/`    | Order detail: patient, physician, insurance and tests                |
 | `/staff/register/` | Create a staff account (lab manager only)                            |
+| `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
 | `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
 
 ## Rules

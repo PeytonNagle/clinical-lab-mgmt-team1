@@ -121,3 +121,26 @@ class TestOrderForm(forms.ModelForm):
         """Active patients' insurance by id, used for the first fill and for the page script on pick."""
         rows = self.fields["patient"].queryset.values("pk", "insurance_provider", "insurance_policy_number")
         return {str(row["pk"]): row for row in rows}
+
+
+class ResultUploadForm(forms.Form):
+    """A machine result .txt file uploaded by a technician."""
+
+    # Plenty for a day of synthetic results; stops someone uploading something huge by mistake.
+    MAX_SIZE = 1024 * 1024
+
+    file = forms.FileField(
+        label="Result file (.txt)",
+        widget=forms.ClearableFileInput(attrs={"class": "form-control", "accept": ".txt"}),
+    )
+
+    def clean_file(self):
+        upload = self.cleaned_data["file"]
+        if not upload.name.lower().endswith(".txt"):
+            raise forms.ValidationError("Upload a .txt file.")
+        if upload.size > self.MAX_SIZE:
+            raise forms.ValidationError("The file is larger than 1 MB.")
+        try:
+            return upload.read().decode("utf-8")
+        except UnicodeDecodeError:
+            raise forms.ValidationError("The file is not plain text.")

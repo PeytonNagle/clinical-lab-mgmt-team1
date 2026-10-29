@@ -8,7 +8,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from core.decorators import role_required
 from core.models import STAFF_ROLES, User
 
-from .forms import PatientForm, TestOrderForm
+from .forms import PatientForm, ResultUploadForm, TestOrderForm
+from .importer import import_results
 from .models import Patient, TestOrder
 from .phone import phone_digits
 
@@ -111,3 +112,14 @@ def order_list(request):
 def order_detail(request, pk):
     orders = TestOrder.objects.select_related("patient", "entered_by").prefetch_related("tests")
     return render(request, "lab/order_detail.html", {"order": get_object_or_404(orders, pk=pk)})
+
+
+@role_required(User.Role.TECHNICIAN)
+def result_upload(request):
+    """Upload a machine result file; show what was saved and what was rejected and why."""
+    form = ResultUploadForm(request.POST or None, request.FILES or None)
+    report = None
+    if request.method == "POST" and form.is_valid():
+        report = import_results(form.cleaned_data["file"], request.user)
+        form = ResultUploadForm()
+    return render(request, "lab/result_upload.html", {"form": form, "report": report})
