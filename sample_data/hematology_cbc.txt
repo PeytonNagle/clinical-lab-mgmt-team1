@@ -1,0 +1,12 @@
+2|Test^WBC^White blood cells|7.2|202610300910
+2|Test^HGB^Hemoglobin|14.1|202610300910
+2|Test^PLT^Platelets|250|202610300910
+3|Test^WBC^White blood cells|12.8|202610300916
+3|Test^HGB^Hemoglobin|13.5|202610300916
+3|Test^PLT^Platelets|310|202610300916
+5|Test^WBC^White blood cells|5.1|202610300922
+5|Test^HGB^Hemoglobin|10.9|202610300922
+5|Test^PLT^Platelets|180|202610300922
+6|Test^WBC^White blood cells|8.4|202610300928
+6|Test^HGB^Hemoglobin|15.2|202610300928
+6|Test^PLT^Platelets|132|202610300928

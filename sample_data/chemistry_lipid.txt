@@ -1,0 +1,12 @@
+3|Test^CHOL^Total cholesterol|182|202610301015
+3|Test^HDL^HDL cholesterol|55|202610301015
+3|Test^LDL^LDL cholesterol|96|202610301015
+3|Test^TRIG^Triglycerides|120|202610301015
+6|Test^CHOL^Total cholesterol|241|202610301022
+6|Test^HDL^HDL cholesterol|36|202610301022
+6|Test^LDL^LDL cholesterol|158|202610301022
+6|Test^TRIG^Triglycerides|210|202610301022
+9|Test^CHOL^Total cholesterol|176|202610301029
+9|Test^HDL^HDL cholesterol|62|202610301029
+9|Test^LDL^LDL cholesterol|88|202610301029
+9|Test^TRIG^Triglycerides|95|202610301029
