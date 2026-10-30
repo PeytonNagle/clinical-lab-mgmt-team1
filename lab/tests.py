@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
+from django.conf import settings 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase
@@ -704,3 +706,139 @@ class ResultUploadViewTests(TestCase):
         self.client.logout()
         self.login_as(User.Role.CASHIER)
         self.assertNotContains(self.client.get(reverse("patient_list")), "Upload results")
+class ParseLineEdgeCaseTests(SimpleTestCase):
+    """C6: the parser reads tidy-but-sloppy lines and rejects anything a machine shouldn't send."""
+
+    def test_extra_spaces_and_lowercase_test_id_are_accepted(self):
+        line = parse_line(" 12 | Test^glu^Glucose | 92 | 202610211340 ", 1)
+        self.assertEqual((line.barcode, line.test_id, line.value), ("12", "GLU", Decimal("92")))
+
+    def test_rejects_each_kind_of_bad_line_with_a_clear_reason(self):
+        bad = {
+            "|Test^GLU^Glucose|92|202610211340": "order ID is missing",
+            "12|Test^GLU^Glucose|92|202610211340|extra": "expected 4 fields",
+            "12|Test^GLU|92|202610211340": "Test^<Test ID>^<description>",
+            "12|Result^GLU^Glucose|92|202610211340": "Test^<Test ID>^<description>",
+            "12|Test^GLU^Glucose|NaN|202610211340": "is not a number",
+            "12|Test^GLU^Glucose|Infinity|202610211340": "is not a number",
+            "12|Test^GLU^Glucose|-4|202610211340": "is negative",
+            "12|Test^GLU^Glucose|92|202613011340": "is not YYYYMMDDHHMM",  # month 13
+        }
+        for text, reason in bad.items():
+            with self.subTest(text=text):
+                with self.assertRaises(ParseError) as caught:
+                    parse_line(text, 1)
+                self.assertIn(reason, str(caught.exception))
+
+
+class ImportEdgeCaseTests(TestCase):
+    """C6: whole-file cases: empty files, blank lines, duplicates, and results landing on the right order."""
+
+    def setUp(self):
+        self.tech = User.objects.create_user(username="tech", role=User.Role.TECHNICIAN)
+
+    def test_empty_file_saves_and_rejects_nothing(self):
+        report = import_results("", self.tech)
+        self.assertEqual((report.saved, report.rejected), ([], []))
+
+    def test_blank_lines_are_skipped_but_line_numbers_stay_right(self):
+        order = make_order(["BMP"])
+        report = import_results("\n" + bmp_lines(order.pk) + "\nnot a result line", self.tech)
+        self.assertEqual(len(report.saved), 1)
+        self.assertEqual(report.rejected, [("Line 6", "expected 4 fields separated by |")])
+
+    def test_rejects_a_value_sent_twice_on_one_panel(self):
+        order = make_order(["BMP"])
+        text = bmp_lines(order.pk) + f"{order.pk}|Test^GLU^Glucose|95|202610211342\n"
+        report = import_results(text, self.tech)
+        self.assertEqual(report.rejected, [(f"Order {order.pk}, BMP", "GLU appears more than once")])
+        self.assertFalse(BMPResult.objects.exists())
+
+    def test_rejects_order_id_that_is_not_a_number(self):
+        report = import_results(bmp_lines("abc"), self.tech)
+        self.assertEqual(report.rejected, [("Order abc, BMP", "no order with this ID")])
+
+    def test_rejects_value_too_large_for_the_database(self):
+        order = make_order(["BMP"])
+        report = import_results(bmp_lines(order.pk, glucose="12345678"), self.tech)
+        self.assertEqual(len(report.rejected), 1)
+        self.assertIn("glucose", report.rejected[0][1])
+        self.assertFalse(BMPResult.objects.exists())
+
+    def test_a_bad_panel_does_not_block_another_panel_on_the_same_order(self):
+        order = make_order(["BMP", "CBC"])
+        incomplete_cbc = "\n".join(cbc_lines(order.pk).splitlines()[:2])
+        report = import_results(bmp_lines(order.pk) + incomplete_cbc, self.tech)
+        self.assertEqual(len(report.saved), 1)
+        self.assertEqual(report.rejected, [(f"Order {order.pk}, CBC", "missing PLT")])
+        self.assertTrue(BMPResult.objects.filter(order=order).exists())
+
+    def test_each_order_gets_its_own_values_and_patient(self):
+        first = make_order(["BMP"])
+        second_patient = make_patient(first_name="John")
+        second_patient.save()
+        second = make_order(["BMP"], patient=second_patient)
+        import_results(bmp_lines(first.pk, glucose="80") + bmp_lines(second.pk, glucose="130"), self.tech)
+        self.assertEqual(BMPResult.objects.get(order=first).glucose, Decimal("80"))
+        self.assertEqual(BMPResult.objects.get(order=second).glucose, Decimal("130"))
+        self.assertEqual(BMPResult.objects.get(order=second).patient, second_patient)
+
+
+SAMPLE_DIR = Path(settings.BASE_DIR) / "sample_data"
+
+
+class SampleDataTests(TestCase):
+    """C6: each file in sample_data/ imports the way it should through the real importer.
+
+    The files use the order IDs that `seed` makes on a fresh database (1 to 30), where order N asks
+    for BMP, BMP + CBC, or all three panels in turn. The test builds orders the same way and
+    points the files at them, since test database IDs don't start at 1.
+    """
+
+    def setUp(self):
+        self.tech = User.objects.create_user(username="tech", role=User.Role.TECHNICIAN)
+        patient = make_patient()
+        patient.save()
+        panels = ["BMP", "CBC", "LIPID"]
+        self.orders = {str(n): make_order(panels[: (n - 1) % 3 + 1], patient) for n in range(1, 11)}
+
+    def load(self, name):
+        """The sample file with each seed order ID swapped for the matching test order's ID."""
+        lines = []
+        for line in (SAMPLE_DIR / name).read_text(encoding="utf-8").splitlines():
+            order_id, rest = line.split("|", 1)
+            order = self.orders.get(order_id)
+            lines.append(f"{order.pk if order else order_id}|{rest}")
+        return "\n".join(lines)
+
+    def test_valid_file_for_each_panel_saves_every_result(self):
+        expected = {"chemistry_bmp.txt": 6, "hematology_cbc.txt": 4, "chemistry_lipid.txt": 3}
+        for name, count in expected.items():
+            with self.subTest(file=name):
+                report = import_results(self.load(name), self.tech)
+                self.assertEqual(report.rejected, [])
+                self.assertEqual(len(report.saved), count)
+
+    def test_some_sample_values_are_flagged_high_or_low(self):
+        import_results(self.load("chemistry_bmp.txt"), self.tech)
+        order_2 = BMPResult.objects.get(order=self.orders["2"])
+        order_6 = BMPResult.objects.get(order=self.orders["6"])
+        self.assertEqual(BMPResult.analyte_for("GLU").flag(order_2.glucose), "H")
+        self.assertEqual(BMPResult.analyte_for("K").flag(order_6.potassium), "L")
+
+    def test_broken_format_file_keeps_the_good_panel_and_rejects_the_rest(self):
+        report = import_results(self.load("broken_format.txt"), self.tech)
+        self.assertEqual(len(report.saved), 1)
+        self.assertEqual(report.saved[0].order, self.orders["7"])
+        reasons = [reason for _, reason in report.rejected]
+        self.assertEqual(len(reasons), 5)
+        for expected in (
+            "is not a number", "expected 4 fields", "is not YYYYMMDDHHMM",
+            "unknown Test ID 'XYZ'", "missing PLT",
+        ):
+            self.assertTrue(any(expected in reason for reason in reasons), expected)
+
+    def test_missing_order_file_saves_nothing(self):
+        report = import_results(self.load("missing_order.txt"), self.tech)
+        self.assertEqual(report.saved, [])
+        self.assertEqual(report.rejected, [("Order 999, BMP", "no order with this ID")])
