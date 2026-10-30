@@ -45,16 +45,25 @@ def parse_line(text, line_number):
         raise ParseError("expected 4 fields separated by |")
     barcode, test, value, stamp = (p.strip() for p in parts)
 
+    if not barcode:
+        raise ParseError("order ID is missing")
+    
     test_parts = test.split("^")
     if len(test_parts) != 3 or test_parts[0] != "Test":
         raise ParseError("second field must look like Test^<Test ID>^<description>")
     _, test_id, description = test_parts
 
     try:
-        value = Decimal(value)
+        number = Decimal(value)
     except InvalidOperation:
         raise ParseError(f"value {value!r} is not a number")
-
+    #No NaN or infinite
+    if not number.is_finite():
+        raise ParseError(f"value {value!r} is not a number")
+    # No negatives
+    if number < 0:
+        raise ParseError(f"value {value!r} is negative")
+    value = number
     try:
         measured_at = timezone.make_aware(datetime.strptime(stamp, "%Y%m%d%H%M"))
     except ValueError:
