@@ -1,0 +1,9 @@
+7|Test^GLU^Glucose|91|202610301100
+7|Test^NA^Sodium|141|202610301100
+7|Test^K^Potassium|4.3|202610301100
+8|Test^GLU^Glucose|abc|202610301105
+8|Test^NA^Sodium|139
+8|Test^K^Potassium|4.2|2026-10-30
+8|Test^XYZ^Mystery value|5|202610301105
+8|Test^WBC^White blood cells|6.6|202610301110
+8|Test^HGB^Hemoglobin|13.9|202610301110
