@@ -7,7 +7,7 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import User
+from core.models import User, STAFF_ROLES
 
 from .importer import ParseError, import_results, parse_line
 from .models import BMPResult, CBCResult, LipidResult, Patient, TestOrder, TestType
@@ -450,6 +450,64 @@ class OrderViewTests(TestCase):
         ):
             self.assertContains(response, text)
 
+class OrderRoleAccessTests(TestCase):
+    #setup
+    def setUp(self):
+        self.patient = make_patient()
+        self.patient.save()
+        self.order = make_order(patient=self.patient)
+        self.urls = [
+            reverse("order_create"),
+            reverse("order_list"),
+            reverse("order_detail", args=[self.order.pk]),
+        ]
+
+    def login_as(self, role):
+        user = User.objects.create_user(username=f"{role}-user", role=role, must_change_password=False)
+        self.client.force_login(user)
+        return user
+
+    def order_form_data(self):
+        return {
+            "patient": self.patient.pk,
+            "source": "walk_in",
+            "tests": [TestType.objects.get(code="CBC").pk],
+            "physician_name": "Dr. Jorge Smith",
+            "physician_license_id": "AZ-12345",
+            "insurance_provider": "West Health",
+            "insurance_policy_number": "POL-12345",
+        }
+    #tests
+    def test_each_staff_role_can_create_an_order(self):
+        for role in sorted(STAFF_ROLES):
+            with self.subTest(role=role):
+                user = self.login_as(role)
+                self.assertEqual(self.client.get(reverse("order_create")).status_code, 200)
+                response = self.client.post(reverse("order_create"), self.order_form_data())
+                self.assertRedirects(response, reverse("order_list"))
+                self.assertTrue(TestOrder.objects.filter(entered_by=user).exists())
+        self.assertEqual(TestOrder.objects.count(), 1 + len(STAFF_ROLES))
+
+    def test_patient_and_provider_roles_get_403(self):
+        for role in (User.Role.PATIENT, User.Role.HEALTHCARE_PROVIDER):
+            self.login_as(role)
+            for url in self.urls:
+                with self.subTest(role=role, url=url):
+                    self.assertEqual(self.client.get(url).status_code, 403)
+            with self.subTest(role=role, url="post"):
+                response = self.client.post(reverse("order_create"), self.order_form_data())
+                self.assertEqual(response.status_code, 403)
+        self.assertEqual(TestOrder.objects.count(), 1)
+
+    def test_logged_out_user_is_sent_to_login(self):
+        for url in self.urls:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertIn(reverse("login"), response["Location"])
+        response = self.client.post(reverse("order_create"), self.order_form_data())
+        self.assertIn(reverse("login"), response["Location"])
+        self.assertEqual(TestOrder.objects.count(), 1)
 
 def make_order(codes=("BMP",), patient=None):
     """Save an order for the given panel codes, with a new patient unless one is given."""
