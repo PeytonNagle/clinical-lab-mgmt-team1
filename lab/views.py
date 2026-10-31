@@ -25,6 +25,9 @@ CAN_REMOVE_PATIENTS = (
 
 ORDERS_PER_PAGE = 25
 
+# Most recent activity log entries shown on a patient's page.
+ACTIVITY_LOG_LIMIT = 50
+
 
 @role_required(*STAFF_ROLES)
 def patient_list(request):
@@ -90,7 +93,11 @@ def patient_detail(request, pk):
     for order in orders:
         # A panel with no result yet raises on access, so getattr's default skips it.
         order.results = [r for r in (getattr(order, name, None) for name in result_names) if r]
-    return render(request, "lab/patient_detail.html", {"patient": patient, "orders": orders})
+    # pk breaks ties: one upload logs several entries in the same instant.
+    activity = patient.activity_logs.select_related("user").order_by("-timestamp", "-pk")[:ACTIVITY_LOG_LIMIT]
+    return render(
+        request, "lab/patient_detail.html", {"patient": patient, "orders": orders, "activity": activity}
+    )
 
 
 @role_required(*CAN_REMOVE_PATIENTS)

@@ -76,6 +76,35 @@
         <p class="text-muted">No orders yet</p>
     {% endfor %}
 
-    {# D4 activity log panel goes here #}
-    <div id="activity-log"></div>
+    <div id="activity-log" class="mt-4">
+        <h2 class="h4 mb-3">Activity log</h2>
+        <div class="card shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>When</th>
+                            <th>Who</th>
+                            <th>Action</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in activity %}
+                            <tr>
+                                <td class="text-nowrap">{{ entry.timestamp|date:"M j, Y, g:i a" }}</td>
+                                <td>{% if entry.user %}{{ entry.user.get_full_name|default:entry.user.username }}{% else %}System{% endif %}</td>
+                                <td>{{ entry.action_label }}</td>
+                                <td>{{ entry.details }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="4" class="text-center text-muted py-3">No activity yet</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 {% endblock %}
