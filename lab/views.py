@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from core.decorators import role_required
 from core.models import STAFF_ROLES, User
+from core.utils import log_event
 
 from .forms import PatientForm, ResultUploadForm, TestOrderForm
 from .importer import import_results
@@ -95,6 +96,13 @@ def order_create(request):
             order.entered_by = request.user
             order.save()
             form.save_m2m()
+        tests = ", ".join(order.tests.values_list("code", flat=True))
+        log_event(
+            request.user,
+            "order_created",
+            patient=order.patient,
+            details=f"Order #{order.pk}: {tests}, {order.get_source_display()}",
+        )
         messages.success(request, f"Order #{order.pk} created for {order.patient}.")
         return redirect("order_list")
     return render(request, "lab/order_form.html", {"form": form})
@@ -121,5 +129,23 @@ def result_upload(request):
     report = None
     if request.method == "POST" and form.is_valid():
         report = import_results(form.cleaned_data["file"], request.user)
+        # cleaned_data["file"] is the decoded text, so the name comes from the upload itself.
+        file_name = request.FILES["file"].name
+        for result in report.saved:
+            values = ", ".join(f"{analyte.test_id} {value} {analyte.units}" for analyte, value, _ in result.rows())
+            log_event(
+                request.user,
+                "result_saved",
+                patient=result.patient,
+                details=f"Order #{result.order_id}, {result.TEST_CODE}: {values}",
+            )
+        for where, reason in report.rejected:
+            log_event(request.user, "result_rejected", details=f"{file_name}, {where}: {reason}")
+        # Logged last so the summary sits on top of the newest-first log.
+        log_event(
+            request.user,
+            "results_imported",
+            details=f"{file_name}: {len(report.saved)} saved, {len(report.rejected)} rejected",
+        )
         form = ResultUploadForm()
     return render(request, "lab/result_upload.html", {"form": form, "report": report})
