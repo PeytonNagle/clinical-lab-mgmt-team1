@@ -960,6 +960,48 @@ class PatientDetailViewTests(TestCase):
             self.get_page()
         self.assertEqual(len(one_order), len(four_orders))
 
+    def test_activity_log_shows_this_patients_entries_newest_first(self):
+        tech = self.login_as(User.Role.TECHNICIAN)
+        tech.first_name, tech.last_name = "Aisha", "Patel"
+        tech.save()
+        older = ActivityLog.objects.create(user=tech, patient=self.patient, action="order_created", details="Order #1")
+        ActivityLog.objects.filter(pk=older.pk).update(timestamp=timezone.now() - timedelta(hours=1))
+        ActivityLog.objects.create(user=tech, patient=self.patient, action="result_saved", details="Order #1, BMP")
+
+        response = self.get_page()
+        self.assertEqual([e.action for e in response.context["activity"]], ["result_saved", "order_created"])
+        self.assertContains(response, "Aisha Patel")
+        self.assertContains(response, "Order created")
+        self.assertContains(response, "Result saved")
+        self.assertNotContains(response, "No activity yet")
+
+    def test_activity_log_hides_other_patients_entries(self):
+        self.login_as(User.Role.TECHNICIAN)
+        other = make_patient(first_name="Maria", last_name="Lopez")
+        other.save()
+        ActivityLog.objects.create(patient=other, action="order_created", details="someone else's order")
+        response = self.get_page()
+        self.assertNotContains(response, "someone else&#x27;s order")
+        self.assertContains(response, "No activity yet")
+
+    def test_activity_entry_without_user_shows_system(self):
+        self.login_as(User.Role.TECHNICIAN)
+        ActivityLog.objects.create(patient=self.patient, action="order_created")
+        self.assertContains(self.get_page(), "<td>System</td>", html=True)
+
+    def test_patient_without_activity_shows_empty_message(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.assertContains(self.get_page(), "No activity yet")
+
+    def test_activity_log_shows_only_the_50_most_recent(self):
+        self.login_as(User.Role.TECHNICIAN)
+        ActivityLog.objects.bulk_create(
+            ActivityLog(patient=self.patient, action="order_created", details=f"entry {n}") for n in range(55)
+        )
+        entries = list(self.get_page().context["activity"])
+        self.assertEqual(len(entries), 50)
+        self.assertEqual(entries[0].details, "entry 54")
+
     def test_patient_list_links_to_detail(self):
         self.login_as(User.Role.TECHNICIAN)
         response = self.client.get(reverse("patient_list"))

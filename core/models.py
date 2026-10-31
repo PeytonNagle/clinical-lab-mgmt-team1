@@ -67,3 +67,8 @@ class ActivityLog(models.Model):
 
     def __str__(self):
         return f"{self.timestamp:%Y-%m-%d %H:%M} - {self.user or 'system'} - {self.action}"
+
+    @property
+    def action_label(self):
+        """The action in readable form, e.g. "order_created" -> "Order created"."""
+        return self.action.replace("_", " ").capitalize()
