@@ -11,7 +11,7 @@ from core.utils import log_event
 
 from .forms import PatientForm, ResultUploadForm, TestOrderForm
 from .importer import import_results
-from .models import Patient, TestOrder
+from .models import PANEL_MODELS, Patient, TestOrder
 from .phone import phone_digits
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
@@ -74,6 +74,23 @@ def patient_update(request, pk):
         messages.success(request, f"Patient {patient} updated.")
         return redirect("patient_list")
     return render(request, "lab/patient_form.html", {"form": form, "title": f"Edit {patient}"})
+
+
+@role_required(*STAFF_ROLES)
+def patient_detail(request, pk):
+    """One patient's details with every order and its results, newest order first. Removed patients still show."""
+    patient = get_object_or_404(Patient, pk=pk)
+    # Each panel's result hangs off the order as a reverse one-to-one, e.g. order.bmpresult.
+    result_names = [model._meta.model_name for model in PANEL_MODELS.values()]
+    orders = (
+        patient.orders.select_related(*result_names)
+        .prefetch_related("tests")
+        .order_by("-created_at", "-pk")
+    )
+    for order in orders:
+        # A panel with no result yet raises on access, so getattr's default skips it.
+        order.results = [r for r in (getattr(order, name, None) for name in result_names) if r]
+    return render(request, "lab/patient_detail.html", {"patient": patient, "orders": orders})
 
 
 @role_required(*CAN_REMOVE_PATIENTS)

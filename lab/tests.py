@@ -5,7 +5,9 @@ from pathlib import Path
 from django.conf import settings 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import SimpleTestCase, TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -880,3 +882,85 @@ class SampleDataTests(TestCase):
         report = import_results(self.load("missing_order.txt"), self.tech)
         self.assertEqual(report.saved, [])
         self.assertEqual(report.rejected, [("Order 999, BMP", "no order with this ID")])
+
+class PatientDetailViewTests(TestCase):
+    """SXFT-21 D3: a patient's details with their full order and result history."""
+
+    def setUp(self):
+        self.patient = make_patient(first_name="James", last_name="Anderson")
+        self.patient.save()
+
+    def login_as(self, role):
+        user = User.objects.create_user(username=role, role=role, must_change_password=False)
+        self.client.force_login(user)
+        return user
+
+    def get_page(self, pk=None):
+        return self.client.get(reverse("patient_detail", args=[pk or self.patient.pk]))
+
+    def add_bmp_result(self, order, glucose="150"):
+        return BMPResult.objects.create(
+            order=order, performed_by=order.entered_by, measured_at=timezone.now(),
+            glucose=Decimal(glucose), sodium=Decimal("140"), potassium=Decimal("4.1"),
+        )
+
+    def test_staff_sees_the_patient(self):
+        self.login_as(User.Role.CASHIER)
+        response = self.get_page()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Anderson, James")
+
+    def test_logged_out_user_is_sent_to_login(self):
+        response = self.get_page()
+        self.assertRedirects(response, f"{reverse('login')}?next=/patients/{self.patient.pk}/",
+                             fetch_redirect_response=False)
+
+    def test_patient_role_is_forbidden(self):
+        self.login_as(User.Role.PATIENT)
+        self.assertEqual(self.get_page().status_code, 403)
+
+    def test_order_and_its_results_are_shown(self):
+        self.login_as(User.Role.TECHNICIAN)
+        with_result = make_order(["BMP"], patient=self.patient)
+        self.add_bmp_result(with_result)
+        without_result = make_order(["CBC"], patient=self.patient)
+
+        response = self.get_page()
+        self.assertContains(response, f"Order #{with_result.pk}")
+        self.assertContains(response, "Glucose")
+        self.assertContains(response, "150.00")
+        self.assertContains(response, "70–99")
+        self.assertContains(response, "High")
+        self.assertContains(response, f"Order #{without_result.pk}")
+        self.assertContains(response, "No results yet", count=1)
+        # Newest order first.
+        self.assertEqual([o.pk for o in response.context["orders"]], [without_result.pk, with_result.pk])
+
+    def test_patient_without_orders_shows_empty_message(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.assertContains(self.get_page(), "No orders yet")
+
+    def test_unknown_patient_is_404(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.assertEqual(self.get_page(pk=9999).status_code, 404)
+
+    def test_removed_patient_still_shows_with_inactive_badge(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.patient.deactivate()
+        self.assertContains(self.get_page(), "Inactive")
+
+    def test_query_count_does_not_grow_with_orders(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.add_bmp_result(make_order(["BMP"], patient=self.patient))
+        with CaptureQueriesContext(connection) as one_order:
+            self.get_page()
+        for _ in range(3):
+            self.add_bmp_result(make_order(["BMP", "CBC"], patient=self.patient))
+        with CaptureQueriesContext(connection) as four_orders:
+            self.get_page()
+        self.assertEqual(len(one_order), len(four_orders))
+
+    def test_patient_list_links_to_detail(self):
+        self.login_as(User.Role.TECHNICIAN)
+        response = self.client.get(reverse("patient_list"))
+        self.assertContains(response, f'href="{reverse("patient_detail", args=[self.patient.pk])}"')
