@@ -930,6 +930,7 @@ class PatientDetailViewTests(TestCase):
         self.assertContains(response, "Glucose")
         self.assertContains(response, "150.00")
         self.assertContains(response, "70–99")
+        self.assertContains(response, "mg/dL")
         self.assertContains(response, "High")
         self.assertContains(response, f"Order #{without_result.pk}")
         self.assertContains(response, "No results yet", count=1)
@@ -1006,3 +1007,60 @@ class PatientDetailViewTests(TestCase):
         self.login_as(User.Role.TECHNICIAN)
         response = self.client.get(reverse("patient_list"))
         self.assertContains(response, f'href="{reverse("patient_detail", args=[self.patient.pk])}"')
+
+
+class PatientHistoryEndToEndTests(TestCase):
+    """SXFT-21 D5: the demo flow, all through the real views: patient -> order -> result upload -> patient page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        # Technicians are the only role that can upload results, and they can also add patients and orders.
+        cls.tech = User.objects.create_user(
+            username="tech", first_name="Aisha", last_name="Patel",
+            role=User.Role.TECHNICIAN, must_change_password=False,
+        )
+
+    def sample_bmp_file_for(self, order):
+        """Order 1's lines from sample_data/chemistry_bmp.txt, pointed at `order`."""
+        lines = (SAMPLE_DIR / "chemistry_bmp.txt").read_text(encoding="utf-8").splitlines()
+        return "\n".join(f"{order.pk}|{line.split('|', 1)[1]}" for line in lines if line.startswith("1|"))
+
+    def test_order_upload_and_patient_page_flow(self):
+        self.client.force_login(self.tech)
+
+        self.client.post(reverse("patient_create"), PATIENT_FORM_DATA)
+        patient = Patient.objects.get()
+
+        bmp = TestType.objects.get(code="BMP")
+        self.client.post(reverse("order_create"), {
+            "patient": patient.pk,
+            "source": TestOrder.Source.WALK_IN,
+            "tests": [bmp.pk],
+            "physician_name": "Dr. Ana Patel",
+            "physician_license_id": "AZ-12345",
+            "insurance_provider": patient.insurance_provider,
+            "insurance_policy_number": patient.insurance_policy_number,
+        })
+        order = TestOrder.objects.get(patient=patient)
+
+        upload = SimpleUploadedFile("chemistry_bmp.txt", self.sample_bmp_file_for(order).encode())
+        self.client.post(reverse("result_upload"), {"file": upload})
+
+        response = self.client.get(reverse("patient_detail", args=[patient.pk]))
+        self.assertContains(response, "Doe, Jane")
+        # Order history: the order and the uploaded glucose value with its units.
+        self.assertContains(response, f"Order #{order.pk}")
+        self.assertContains(response, "Glucose")
+        self.assertContains(response, "88.00")
+        self.assertContains(response, "mg/dL")
+        self.assertNotContains(response, "No results yet")
+        # Activity log: this patient's order and saved result, both by the technician.
+        self.assertEqual(
+            [(e.action, e.user) for e in response.context["activity"]],
+            [("result_saved", self.tech), ("order_created", self.tech)],
+        )
+        self.assertContains(response, "Order created")
+        self.assertContains(response, "Result saved")
+        self.assertContains(response, "Aisha Patel")
+        # The file summary has no patient (a file can cover several), so it isn't on this page.
+        self.assertNotContains(response, "Results imported")

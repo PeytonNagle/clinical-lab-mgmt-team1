@@ -7,10 +7,20 @@
 
     <div class="card shadow-sm mb-4">
         <div class="card-body p-4">
-            <p class="text-muted">
-                Upload a result .txt file from the chemistry or hematology analyzer. Each line looks like
-                <code>ORDER ID|Test^GLU^Glucose|92|202610211340</code>.
-            </p>
+            <p class="mb-2">Choose the <strong>.txt</strong> result file exported by the chemistry or hematology analyzer.</p>
+
+            <details class="small text-muted mb-3">
+                <summary>What should the file look like?</summary>
+                <p class="mt-2 mb-1">One test value per line, with four parts separated by <code>|</code>:</p>
+                <pre class="bg-body-tertiary border rounded p-2 mb-2"><code>12|Test^GLU^Glucose|92|202610211340</code></pre>
+                <ul class="mb-0">
+                    <li><strong>12</strong>: the order ID (Report ID), shown on the order page</li>
+                    <li><strong>Test^GLU^Glucose</strong>: the test code and name</li>
+                    <li><strong>92</strong>: the measured value</li>
+                    <li><strong>202610211340</strong>: date and time measured (Oct 21, 2026, 1:40 pm)</li>
+                </ul>
+                <p class="mt-2 mb-0">Lines that can't be matched to an order are listed below after upload; the rest of the file is still saved.</p>
+            </details>
             <form method="post" enctype="multipart/form-data" novalidate>
                 {% csrf_token %}
                 <div class="mb-3">
