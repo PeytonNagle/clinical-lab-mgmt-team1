@@ -9,7 +9,7 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import User, STAFF_ROLES
+from core.models import ActivityLog, User, STAFF_ROLES
 
 from .importer import ParseError, import_results, parse_line
 from .models import BMPResult, CBCResult, LipidResult, Patient, TestOrder, TestType
@@ -306,6 +306,22 @@ class OrderViewTests(TestCase):
         self.assertEqual(order.physician_phone, "520-555-0199")
         self.assertEqual((order.insurance_provider, order.insurance_policy_number), ("Aetna", "AET-558812"))
         self.assertEqual(sorted(order.tests.values_list("code", flat=True)), ["BMP", "LIPID"])
+
+    def test_valid_order_is_logged_once_for_its_patient(self):
+        patient = self.add_patient()
+        self.client.post(reverse("order_create"), self.form_data(patient))
+        order = TestOrder.objects.get()
+        entry = ActivityLog.objects.get(action="order_created")
+        self.assertEqual(ActivityLog.objects.count(), 1)
+        self.assertEqual((entry.user, entry.patient), (self.staff, patient))
+        self.assertIn(f"Order #{order.pk}", entry.details)
+        self.assertIn("BMP", entry.details)
+        self.assertIn("Phone-in", entry.details)
+
+    def test_invalid_order_is_not_logged(self):
+        patient = self.add_patient()
+        self.client.post(reverse("order_create"), {**self.form_data(patient), "tests": []})
+        self.assertFalse(ActivityLog.objects.exists())
 
     def test_each_required_field_is_enforced_and_nothing_is_saved(self):
         patient = self.add_patient()
@@ -690,6 +706,28 @@ class ResultUploadViewTests(TestCase):
         self.assertContains(response, "Saved (1)")
         self.assertContains(response, "High")
         self.assertContains(response, "Order 9999, BMP")
+
+    def test_upload_logs_summary_each_saved_panel_and_each_rejection(self):
+        tech = self.login_as(User.Role.TECHNICIAN)
+        bmp_order, cbc_order = make_order(["BMP"]), make_order(["CBC"])
+        # Two complete panels (one per order) and one line that can't be read.
+        self.upload(bmp_lines(bmp_order.pk) + cbc_lines(cbc_order.pk) + "not a result line\n", name="day1.txt")
+
+        self.assertEqual(ActivityLog.objects.filter(user=tech).count(), 4)
+        summary = ActivityLog.objects.get(action="results_imported")
+        self.assertIsNone(summary.patient)
+        self.assertEqual(summary.details, "day1.txt: 2 saved, 1 rejected")
+
+        saved = ActivityLog.objects.filter(action="result_saved")
+        self.assertEqual({entry.patient for entry in saved}, {bmp_order.patient, cbc_order.patient})
+        self.assertEqual(
+            saved.get(patient=bmp_order.patient).details,
+            f"Order #{bmp_order.pk}, BMP: GLU 92 mg/dL, NA 140 mmol/L, K 4.1 mmol/L",
+        )
+
+        rejected = ActivityLog.objects.get(action="result_rejected")
+        self.assertIsNone(rejected.patient)
+        self.assertEqual(rejected.details, "day1.txt, Line 7: expected 4 fields separated by |")
 
     def test_rejects_non_txt_file(self):
         self.login_as(User.Role.TECHNICIAN)
