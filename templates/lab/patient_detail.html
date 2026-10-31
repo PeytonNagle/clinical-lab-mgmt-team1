@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}{{ patient }} | CLMS{% endblock %}
+
+{% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3 m-0">
+            {{ patient }}
+            {% if not patient.is_active %}<span class="badge text-bg-secondary fs-6 align-middle">Inactive</span>{% endif %}
+        </h1>
+        <a href="{% url 'patient_list' %}">&lsaquo; All patients</a>
+    </div>
+
+    <div class="card shadow-sm mb-4"><div class="card-body">
+        <h2 class="h6 text-uppercase text-muted">Patient</h2>
+        <dl class="row mb-0">
+            <dt class="col-sm-3">Date of birth</dt><dd class="col-sm-9">{{ patient.date_of_birth|date:"Y-m-d" }}</dd>
+            <dt class="col-sm-3">Gender</dt><dd class="col-sm-9">{{ patient.get_gender_display }}</dd>
+            <dt class="col-sm-3">Phone</dt><dd class="col-sm-9">{{ patient.phone }}</dd>
+            <dt class="col-sm-3">Email</dt><dd class="col-sm-9">{{ patient.email|default:"&mdash;" }}</dd>
+            <dt class="col-sm-3">Insurance provider</dt><dd class="col-sm-9">{{ patient.insurance_provider }}</dd>
+            <dt class="col-sm-3">Policy number</dt><dd class="col-sm-9">{{ patient.insurance_policy_number }}</dd>
+        </dl>
+    </div></div>
+
+    <h2 class="h4 mb-3">Order history</h2>
+    {% for order in orders %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <div>
+                    <a class="fw-semibold" href="{% url 'order_detail' order.pk %}">Order #{{ order.pk }}</a>
+                    <span class="text-muted">&middot; {{ order.created_at|date:"M j, Y, g:i a" }}
+                        &middot; {{ order.get_source_display }}
+                        &middot; {{ order.physician_name }}</span>
+                </div>
+                <span class="badge text-bg-{% if order.status == 'completed' %}success{% else %}warning{% endif %}">{{ order.get_status_display }}</span>
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-2">
+                    Tests: {% for test in order.tests.all %}{{ test.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                </p>
+                {% for result in order.results %}
+                    <h3 class="h6 mt-3">{{ result.TEST_CODE }}</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Test</th>
+                                    <th>Value</th>
+                                    <th>Units</th>
+                                    <th>Reference range</th>
+                                    <th>Status</th>
+                                    <th>Received</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for analyte, value, flag in result.rows %}
+                                    <tr{% if flag %} class="table-warning"{% endif %}>
+                                        <td>{{ analyte.label }}</td>
+                                        <td>{{ value }}</td>
+                                        <td>{{ analyte.units }}</td>
+                                        <td>{{ analyte.range_display }}</td>
+                                        <td>{% if flag == "L" %}Low{% elif flag == "H" %}High{% else %}Normal{% endif %}</td>
+                                        <td>{{ result.received_at|date:"M j, Y, g:i a" }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% empty %}
+                    <p class="text-muted mb-0">No results yet</p>
+                {% endfor %}
+            </div>
+        </div>
+    {% empty %}
+        <p class="text-muted">No orders yet</p>
+    {% endfor %}
+
+    {# D4 activity log panel goes here #}
+    <div id="activity-log"></div>
+{% endblock %}
