@@ -10,8 +10,9 @@ from core.models import STAFF_ROLES, User
 from core.utils import log_event
 
 from .forms import PatientForm, ResultUploadForm, TestOrderForm
+from .barcodes import barcode_svg
 from .importer import import_results
-from .models import PANEL_MODELS, Patient, TestOrder
+from .models import PANEL_MODELS, Patient, Sample, TestOrder
 from .phone import phone_digits
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
@@ -173,3 +174,19 @@ def result_upload(request):
         )
         form = ResultUploadForm()
     return render(request, "lab/result_upload.html", {"form": form, "report": report})
+
+
+@role_required(User.Role.SPECIMEN_COLLECTOR)
+def sample_label(request, pk):
+    """Printable tube label with the sample's Code 128 barcode (spec 6.3.4)."""
+    sample = get_object_or_404(Sample.objects.select_related("order__patient"), pk=pk)
+    return render(
+        request,
+        "lab/sample_label.html",
+        {
+            "sample": sample,
+            "order": sample.order,
+            "patient": sample.order.patient,
+            "barcode_svg": barcode_svg(sample.barcode),
+        },
+    )

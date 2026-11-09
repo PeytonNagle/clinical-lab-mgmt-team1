@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from core.models import ActivityLog, User, STAFF_ROLES
 
+from .barcodes import barcode_svg
 from .importer import ParseError, import_results, parse_line
 from .models import BMPResult, CBCResult, LipidResult, Patient, Sample, TestOrder, TestType
 from .phone import normalize_phone
@@ -638,6 +639,54 @@ class SampleModelTests(TestCase):
         sample.save()
         sample.refresh_from_db()
         self.assertTrue(sample.is_collected)
+
+
+class BarcodeSvgTests(SimpleTestCase):
+    """SXFT-19 B2: Code 128 barcode rendered as inline SVG."""
+
+    def test_returns_inline_svg(self):
+        svg = barcode_svg("1234")
+        self.assertIn("<svg", svg)
+        self.assertFalse(svg.startswith("<?xml"))
+
+
+class SampleLabelViewTests(TestCase):
+    """SXFT-19 B2: printable label page, specimen collectors only (spec 6.3.4)."""
+
+    def setUp(self):
+        self.order = make_order()
+        self.sample = Sample.objects.create(order=self.order, sample_type=Sample.SampleType.BLOOD)
+        self.url = reverse("sample_label", args=[self.sample.pk])
+
+    def login_as(self, role):
+        user = User.objects.create_user(
+            username=role, password="s3cret-pass", role=role, must_change_password=False
+        )
+        self.client.force_login(user)
+
+    def test_specimen_collector_sees_label(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<svg")
+        self.assertContains(response, self.sample.barcode)
+        self.assertContains(response, self.order.patient.last_name)
+        self.assertContains(response, self.order.patient.first_name)
+        self.assertContains(response, "Not collected yet")
+
+    def test_technician_is_forbidden(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_anonymous_user_is_sent_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+    def test_unknown_sample_returns_404(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.client.get(reverse("sample_label", args=[self.sample.pk + 999]))
+        self.assertEqual(response.status_code, 404)
 
 
 class ParseLineTests(TestCase):

@@ -4,3 +4,4 @@ django-environ
 pytest
 pytest-django
 phonenumbers
+python-barcode
