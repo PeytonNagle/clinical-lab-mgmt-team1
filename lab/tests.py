@@ -5,7 +5,7 @@ from pathlib import Path
 from django.conf import settings 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import connection
+from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -14,7 +14,7 @@ from django.utils import timezone
 from core.models import ActivityLog, User, STAFF_ROLES
 
 from .importer import ParseError, import_results, parse_line
-from .models import BMPResult, CBCResult, LipidResult, Patient, TestOrder, TestType
+from .models import BMPResult, CBCResult, LipidResult, Patient, Sample, TestOrder, TestType
 from .phone import normalize_phone
 
 
@@ -607,6 +607,37 @@ class PanelResultModelTests(TestCase):
         )
         self.assertEqual([flag for _, _, flag in result.rows()], ["H", "", ""])
         self.assertEqual(result.patient, order.patient)
+
+
+class SampleModelTests(TestCase):
+    """SXFT-19 B1: one sample (tube) per order, barcoded with the order's ID."""
+
+    def test_barcode_is_set_to_the_order_id(self):
+        order = make_order()
+        sample = Sample.objects.create(order=order, sample_type=Sample.SampleType.BLOOD)
+        self.assertEqual(sample.barcode, str(order.pk))
+        self.assertEqual(str(sample), f"Sample {order.pk} - {order.patient}")
+
+    def test_barcodes_are_unique(self):
+        first = Sample.objects.create(order=make_order(), sample_type=Sample.SampleType.BLOOD)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Sample.objects.create(
+                order=make_order(), sample_type=Sample.SampleType.URINE, barcode=first.barcode
+            )
+
+    def test_only_one_sample_per_order(self):
+        order = make_order()
+        Sample.objects.create(order=order, sample_type=Sample.SampleType.BLOOD)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Sample.objects.create(order=order, sample_type=Sample.SampleType.URINE, barcode="other")
+
+    def test_is_collected_once_collected_at_is_set(self):
+        sample = Sample.objects.create(order=make_order(), sample_type=Sample.SampleType.BLOOD)
+        self.assertFalse(sample.is_collected)
+        sample.collected_at = timezone.now()
+        sample.save()
+        sample.refresh_from_db()
+        self.assertTrue(sample.is_collected)
 
 
 class ParseLineTests(TestCase):
