@@ -2,7 +2,7 @@ from django import forms
 from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
 
-from .models import SELF_PAY, Patient, TestOrder, TestType
+from .models import SELF_PAY, Patient, Sample, TestOrder, TestType
 from .phone import PhoneField
 
 
@@ -121,6 +121,12 @@ class TestOrderForm(forms.ModelForm):
         """Active patients' insurance by id, used for the first fill and for the page script on pick."""
         rows = self.fields["patient"].queryset.values("pk", "insurance_provider", "insurance_policy_number")
         return {str(row["pk"]): row for row in rows}
+
+
+class CollectSampleForm(forms.Form):
+    """What kind of specimen the collector drew for an order."""
+
+    sample_type = forms.ChoiceField(choices=Sample.SampleType.choices)
 
 
 class LabelReprintForm(forms.Form):

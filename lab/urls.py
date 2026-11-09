@@ -15,4 +15,6 @@ urlpatterns = [
     path("samples/<int:pk>/label/", views.sample_label, name="sample_label"),
     path("samples/<int:pk>/print/", views.sample_print, name="sample_print"),
     path("samples/<int:pk>/reprint/", views.sample_reprint, name="sample_reprint"),
+    path("lab/collect/", views.collector_dashboard, name="collector_dashboard"),
+    path("lab/collect/<int:order_id>/", views.collect_sample, name="collect_sample"),
 ]

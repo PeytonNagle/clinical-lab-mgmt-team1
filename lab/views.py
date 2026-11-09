@@ -13,7 +13,7 @@ from core.models import STAFF_ROLES, User
 from core.utils import log_event
 
 from .barcodes import barcode_svg
-from .forms import LabelReprintForm, PatientForm, ResultUploadForm, TestOrderForm
+from .forms import CollectSampleForm, LabelReprintForm, PatientForm, ResultUploadForm, TestOrderForm
 from .importer import import_results
 from .models import PANEL_MODELS, Patient, Sample, TestOrder
 from .phone import phone_digits
@@ -269,3 +269,64 @@ def sample_reprint(request, pk):
         details=f"barcode {sample.barcode}, reason: {form.cleaned_data['reason']}",
     )
     return redirect(label_url(pk, auto_print=True))
+
+
+@role_required(User.Role.SPECIMEN_COLLECTOR, User.Role.LAB_MANAGER)
+def collector_dashboard(request):
+    """Orders waiting for a specimen, and what was collected today. The lab manager can only look."""
+    waiting = (
+        TestOrder.objects.filter(status=TestOrder.Status.PENDING, patient__is_active=True)
+        .filter(Q(sample__isnull=True) | Q(sample__collected_at__isnull=True))
+        .select_related("patient", "sample")
+        .prefetch_related("tests")
+        .order_by("created_at")
+    )
+    collected_today = (
+        Sample.objects.filter(collected_at__date=timezone.localdate())
+        .select_related("order__patient", "collected_by")
+        .order_by("-collected_at")
+    )
+    return render(
+        request,
+        "lab/collector_dashboard.html",
+        {
+            "waiting": waiting,
+            "collected_today": collected_today,
+            "can_collect": request.user.role == User.Role.SPECIMEN_COLLECTOR,
+            "sample_types": Sample.SampleType.choices,
+        },
+    )
+
+
+@role_required(User.Role.SPECIMEN_COLLECTOR)
+@require_POST
+def collect_sample(request, order_id):
+    """Record that the collector drew the specimen for this order, then go to its label."""
+    order = get_object_or_404(TestOrder.objects.select_related("patient"), pk=order_id)
+    if order.status != TestOrder.Status.PENDING or not order.patient.is_active:
+        messages.error(request, f"Order #{order.pk} isn't waiting for collection.")
+        return redirect("collector_dashboard")
+    form = CollectSampleForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, f"Choose a sample type for order #{order.pk}.")
+        return redirect("collector_dashboard")
+    sample_type = form.cleaned_data["sample_type"]
+    with transaction.atomic():
+        sample, _ = Sample.objects.get_or_create(order=order, defaults={"sample_type": sample_type})
+        # One UPDATE that only matches an uncollected sample, so a double click can't collect twice.
+        updated = Sample.objects.filter(pk=sample.pk, collected_at__isnull=True).update(
+            collected_at=timezone.now(), collected_by=request.user, sample_type=sample_type
+        )
+        if updated == 1:
+            type_label = Sample.SampleType(sample_type).label
+            log_event(
+                request.user,
+                "sample_collected",
+                patient=order.patient,
+                details=f"order {order.pk}, barcode {sample.barcode}, {type_label}",
+            )
+    if updated == 0:
+        messages.error(request, f"The sample for order #{order.pk} has already been collected.")
+        return redirect("collector_dashboard")
+    messages.success(request, f"Sample {sample.barcode} collected for {order.patient}. Print its label now.")
+    return redirect("sample_label", pk=sample.pk)
