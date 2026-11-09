@@ -123,6 +123,17 @@ class TestOrderForm(forms.ModelForm):
         return {str(row["pk"]): row for row in rows}
 
 
+class LabelReprintForm(forms.Form):
+    """Why the lab manager is reprinting a label that was already printed. Saved in the activity log."""
+
+    # Spaces are trimmed before the length check, so "    " doesn't count as a reason.
+    reason = forms.CharField(
+        min_length=5,
+        max_length=255,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "e.g. label smudged"}),
+    )
+
+
 class ResultUploadForm(forms.Form):
     """A machine result .txt file uploaded by a technician."""
 

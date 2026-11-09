@@ -689,6 +689,135 @@ class SampleLabelViewTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class SamplePrintOnceTests(TestCase):
+    """SXFT-19 B3: a collector prints a label once; only the lab manager can reprint, with a reason."""
+
+    def setUp(self):
+        self.order = make_order()
+        self.sample = Sample.objects.create(order=self.order, sample_type=Sample.SampleType.BLOOD)
+        self.label_url = reverse("sample_label", args=[self.sample.pk])
+        self.print_url = reverse("sample_print", args=[self.sample.pk])
+        self.reprint_url = reverse("sample_reprint", args=[self.sample.pk])
+        self.collector = self.make_user(User.Role.SPECIMEN_COLLECTOR)
+        self.manager = self.make_user(User.Role.LAB_MANAGER)
+
+    def make_user(self, role):
+        return User.objects.create_user(
+            username=role, password="s3cret-pass", role=role, must_change_password=False
+        )
+
+    def print_as_collector(self):
+        self.client.force_login(self.collector)
+        return self.client.post(self.print_url)
+
+    def test_first_print_marks_sample_and_logs_it(self):
+        response = self.print_as_collector()
+        self.assertRedirects(response, f"{self.label_url}?print=1")
+        self.sample.refresh_from_db()
+        self.assertIsNotNone(self.sample.printed_at)
+        self.assertEqual(self.sample.printed_by, self.collector)
+        self.assertTrue(self.sample.is_printed)
+        log = ActivityLog.objects.get(action="label_printed")
+        self.assertEqual(log.user, self.collector)
+        self.assertEqual(log.patient, self.order.patient)
+        self.assertEqual(log.details, f"barcode {self.sample.barcode}")
+
+    def test_second_print_changes_nothing(self):
+        self.print_as_collector()
+        self.sample.refresh_from_db()
+        first_printed_at = self.sample.printed_at
+        response = self.client.post(self.print_url)
+        self.assertRedirects(response, self.label_url, fetch_redirect_response=False)
+        self.sample.refresh_from_db()
+        self.assertEqual(self.sample.printed_at, first_printed_at)
+        self.assertEqual(ActivityLog.objects.filter(action="label_printed").count(), 1)
+
+    def test_label_shows_once_right_after_printing_then_is_hidden(self):
+        response = self.client.get(self.print_as_collector()["Location"])
+        self.assertContains(response, "<svg")
+        self.assertContains(response, "window.print()")
+        # Reloading, even with ?print=1, no longer shows the label.
+        response = self.client.get(f"{self.label_url}?print=1")
+        self.assertNotContains(response, "<svg")
+        self.assertNotContains(response, "window.print()")
+        self.assertContains(response, "Label already printed on")
+        self.assertContains(response, "Ask the lab manager to reprint.")
+
+    def test_collector_label_page_hides_barcode_after_printing(self):
+        self.print_as_collector()
+        response = self.client.get(self.label_url)
+        self.assertNotContains(response, "<svg")
+        self.assertNotContains(response, 'class="barcode-value"')
+        self.assertContains(response, "Label already printed on")
+        self.assertNotContains(response, self.print_url)
+
+    def test_manager_can_reprint_with_a_reason(self):
+        self.print_as_collector()
+        self.sample.refresh_from_db()
+        original = (self.sample.printed_at, self.sample.printed_by)
+        self.client.force_login(self.manager)
+        response = self.client.post(self.reprint_url, {"reason": "label smudged"})
+        self.assertRedirects(response, f"{self.label_url}?print=1", fetch_redirect_response=False)
+        log = ActivityLog.objects.get(action="label_reprinted")
+        self.assertEqual(log.user, self.manager)
+        self.assertEqual(log.details, f"barcode {self.sample.barcode}, reason: label smudged")
+        self.sample.refresh_from_db()
+        self.assertEqual((self.sample.printed_at, self.sample.printed_by), original)
+        # The manager's label page prints automatically and offers another reprint.
+        response = self.client.get(response["Location"])
+        self.assertContains(response, "<svg")
+        self.assertContains(response, "window.print()")
+        self.assertContains(response, "Reason for reprint")
+
+    def test_reprint_needs_a_real_reason(self):
+        self.print_as_collector()
+        self.client.force_login(self.manager)
+        for reason in ("", "    ", "oops"):
+            with self.subTest(reason=reason):
+                response = self.client.post(self.reprint_url, {"reason": reason})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "is-invalid")
+                self.assertNotContains(response, "window.print()")
+        self.assertFalse(ActivityLog.objects.filter(action="label_reprinted").exists())
+
+    def test_reprint_before_first_print_is_refused(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(self.reprint_url, {"reason": "label smudged"})
+        self.assertRedirects(response, self.label_url, fetch_redirect_response=False)
+        self.assertFalse(ActivityLog.objects.filter(action="label_reprinted").exists())
+
+    def test_manager_sees_label_but_no_print_button_before_first_print(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(self.label_url)
+        self.assertContains(response, "<svg")
+        self.assertContains(response, "Waiting for the specimen collector to print")
+        self.assertNotContains(response, self.print_url)
+
+    def test_collector_cannot_reprint(self):
+        self.print_as_collector()
+        response = self.client.post(self.reprint_url, {"reason": "label smudged"})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ActivityLog.objects.filter(action="label_reprinted").exists())
+
+    def test_technician_is_forbidden_everywhere(self):
+        self.client.force_login(self.make_user(User.Role.TECHNICIAN))
+        self.assertEqual(self.client.get(self.label_url).status_code, 403)
+        for url in (self.print_url, self.reprint_url):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 403)
+                self.assertEqual(self.client.post(url, {"reason": "label smudged"}).status_code, 403)
+        self.sample.refresh_from_db()
+        self.assertFalse(self.sample.is_printed)
+
+    def test_print_and_reprint_are_post_only(self):
+        self.client.force_login(self.collector)
+        self.assertEqual(self.client.get(self.print_url).status_code, 405)
+        self.client.force_login(self.manager)
+        self.assertEqual(self.client.get(self.reprint_url).status_code, 405)
+        self.sample.refresh_from_db()
+        self.assertFalse(self.sample.is_printed)
+
+
 class ParseLineTests(TestCase):
     def test_reads_a_valid_line(self):
         line = parse_line("12|Test^GLU^Glucose|92.5|202610211340", 1)

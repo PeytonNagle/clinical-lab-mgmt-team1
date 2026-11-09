@@ -13,4 +13,6 @@ urlpatterns = [
     path("orders/<int:pk>/", views.order_detail, name="order_detail"),
     path("results/upload/", views.result_upload, name="result_upload"),
     path("samples/<int:pk>/label/", views.sample_label, name="sample_label"),
+    path("samples/<int:pk>/print/", views.sample_print, name="sample_print"),
+    path("samples/<int:pk>/reprint/", views.sample_reprint, name="sample_reprint"),
 ]

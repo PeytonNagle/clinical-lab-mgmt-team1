@@ -171,12 +171,29 @@ class Sample(models.Model):
     # When the sample was drawn. Empty means not collected yet.
     collected_at = models.DateTimeField(null=True, blank=True)
 
+    # When the collector printed the label (first print only; reprints don't change it).
+    # Empty means not printed yet.
+    printed_at = models.DateTimeField(null=True, blank=True)
+
+    # Collector who printed the label the first time. Kept empty if that account is removed.
+    printed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="printed_samples",
+    )
+
     def __str__(self):
         return f"Sample {self.barcode} - {self.order.patient}"
 
     @property
     def is_collected(self):
         return self.collected_at is not None
+
+    @property
+    def is_printed(self):
+        return self.printed_at is not None
 
     def save(self, *args, **kwargs):
         # Only fill in a missing barcode, so an existing label never changes.
