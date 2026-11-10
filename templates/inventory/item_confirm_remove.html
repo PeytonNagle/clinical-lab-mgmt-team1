@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Remove supply item | CLMS{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-sm-10 col-md-7 col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-2">Remove {{ item }}?</h1>
+                <p class="text-muted">
+                    The item will no longer appear in the inventory. Its {{ item.lot_count }} lot{{ item.lot_count|pluralize }} {{ item.lot_count|pluralize:"is,are" }} kept.
+                </p>
+                {% if used_by %}
+                    <div class="alert alert-warning">
+                        Used by
+                        {% for need in used_by %}{{ need.test_type.code }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+                        Those tests will stop taking it from stock.
+                    </div>
+                {% endif %}
+                <form method="post" class="d-flex gap-2">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger">Remove item</button>
+                    <a class="btn btn-outline-secondary" href="{% url 'item_detail' item.pk %}">Cancel</a>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

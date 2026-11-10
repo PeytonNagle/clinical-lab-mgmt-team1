@@ -9,7 +9,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python manage.py migrate
-python manage.py seed      # fake users, patients and orders; safe to re-run
+python manage.py seed      # fake users, patients, orders and stock; safe to re-run
 python manage.py runserver # http://127.0.0.1:8000/
 ```
 
@@ -42,7 +42,7 @@ Only lab managers can create accounts, so whoever installs the system creates th
 | -------------- | ----------------------------------------------------------------------------------- | ------------------------------ |
 | `core/`        | User model with roles, login and passwords, activity log, `role_required`, reports  | MVP 1 (login), MVP 2 (reports) |
 | `lab/`         | Patients, physicians, test orders, samples, barcodes, results, `importer.py`        | MVP 1                          |
-| `inventory/`   | Reagents and kits, stock, expiry, reorders                                          | MVP 2                          |
+| `inventory/`   | Supply items, stock lots with expiry, what each test uses, `stock.py`               | MVP 2                          |
 | `billing/`     | Purchases, payment types, receipts                                                  | MVP 2                          |
 | `templates/`   | HTML pages: `base.html` + one subfolder per app                                     | Every story                    |
 | `config/`      | `settings.py` and `urls.py` (small edits only)                                      | When adding an app or URL      |
@@ -81,6 +81,11 @@ Every page requires login except the login page.
 | `/orders/<id>/`    | Order detail: patient, physician, insurance and tests                |
 | `/staff/register/` | Create a staff account (lab manager only)                            |
 | `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
+| `/inventory/`      | Supply list with stock left and next expiry (lab manager). Also linked in the navbar |
+| `/inventory/new/`  | Add a supply item (lab manager)                                      |
+| `/inventory/<id>/` | One item's lots, soonest expiry first, and which tests use it. Edit, remove and receive from here |
+| `/inventory/<id>/receive/` | Receive a delivery: lot number, quantity and expiry (lab manager) |
+| `/inventory/lots/<id>/edit/` | Correct a lot after a stock count (lab manager)            |
 | `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
 
 ## Rules

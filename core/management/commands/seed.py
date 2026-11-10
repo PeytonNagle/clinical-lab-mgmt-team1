@@ -5,8 +5,8 @@ Every name, address, phone number, email and insurance number below is made up.
 Never run this against a production database.
 
 Usage: python manage.py seed
-Safe to run more than once: existing rows are updated, not duplicated, and orders are
-added only while there are none.
+Safe to run more than once: existing rows are updated, not duplicated, and orders and stock
+lots are added only while there are none.
 """
 
 from datetime import date, timedelta
@@ -16,6 +16,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.models import User
+from inventory.models import StockLot, SupplyItem
 from lab.models import Patient, TestOrder, TestType
 
 # Shared password for every seeded staff account (stored hashed via set_password).
@@ -103,8 +104,40 @@ def seed_orders():
     return ORDER_COUNT
 
 
+# Fake deliveries: (supply item name, lot number, quantity, days until expiry).
+# One lot is already expired and one item is out of stock, so the inventory pages show both cases.
+STOCK_LOTS = [
+    ("Serum separator tube (gold top)", "SST-24117", 40, 120),
+    ("Serum separator tube (gold top)", "SST-23980", 6, 10),
+    ("EDTA tube (lavender top)", "EDTA-55102", 30, 200),
+    ("BMP reagent cartridge", "BMP-R-0931", 25, 90),
+    ("BMP reagent cartridge", "BMP-R-0874", 10, -5),
+    ("Lipid panel reagent cartridge", "LIP-R-1120", 15, 60),
+    ("Pipette tips", "TIP-77810", 500, 365),
+]
+
+
+def seed_stock():
+    """Add the fake lots to the supply items from the inventory migration. Skipped once any lot exists."""
+    if StockLot.objects.exists():
+        return 0
+    manager = User.objects.get(username="manager1")
+    today = timezone.localdate()
+    created = 0
+    for name, lot_number, quantity, days in STOCK_LOTS:
+        item = SupplyItem.objects.filter(name=name, is_active=True).first()
+        if item is None:
+            continue
+        StockLot.objects.create(
+            item=item, lot_number=lot_number, quantity=quantity,
+            expiry_date=today + timedelta(days=days), received_by=manager,
+        )
+        created += 1
+    return created
+
+
 class Command(BaseCommand):
-    help = "Load FAKE seed data (staff users, patients and orders) for local testing only."
+    help = "Load FAKE seed data (staff users, patients, orders and stock) for local testing only."
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -135,8 +168,10 @@ class Command(BaseCommand):
             patients_created += created
 
         orders_created = seed_orders()
+        lots_created = seed_stock()
 
         self.stdout.write(self.style.SUCCESS(
             f"Seed complete: {len(STAFF_USERS)} users, {len(PATIENTS)} patients "
-            f"({users_created} users, {patients_created} patients and {orders_created} orders newly created)"
+            f"({users_created} users, {patients_created} patients, {orders_created} orders and "
+            f"{lots_created} stock lots newly created)"
         ))

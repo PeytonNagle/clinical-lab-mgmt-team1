@@ -14,7 +14,10 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
+
+from inventory.stock import use_supplies
 
 from .models import PANEL_MODELS, TestOrder
 
@@ -79,6 +82,8 @@ class ImportReport:
     saved: list = field(default_factory=list)
     # (where, reason) pairs, e.g. ("Line 3", "unknown Test ID 'XYZ'") or ("Order 12, CBC", "...").
     rejected: list = field(default_factory=list)
+    # (where, message) pairs for saved results whose test needed more stock than was left.
+    stock_warnings: list = field(default_factory=list)
 
 
 def import_results(text, user):
@@ -87,6 +92,9 @@ def import_results(text, user):
     A panel is saved only when its order exists, the order asked for that panel, the patient is
     active, the panel has no result yet, and the file has every value on the panel exactly once.
     Anything else is rejected and left out; the rest of the file is still saved.
+
+    Each saved panel takes its test's supplies from stock (SXFT-22). The machine has already run the
+    test, so a stock shortage doesn't reject the result; it is reported as a stock warning instead.
     """
     report = ImportReport()
 
@@ -109,11 +117,15 @@ def import_results(text, user):
     for (barcode, panel), lines in groups.items():
         where = f"Order {barcode}, {panel.TEST_CODE}"
         try:
-            result = _save_panel(barcode, panel, lines, user)
+            with transaction.atomic():
+                result = _save_panel(barcode, panel, lines, user)
+                shortages = use_supplies(panel.TEST_CODE)
         except ParseError as error:
             report.rejected.append((where, str(error)))
         else:
             report.saved.append(result)
+            for item, missing in shortages:
+                report.stock_warnings.append((where, f"{item} ran out, {missing} {item.unit} short"))
     return report
 
 
