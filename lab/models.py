@@ -140,6 +140,68 @@ class TestOrder(models.Model):
         super().save(*args, **kwargs)
 
 
+class Sample(models.Model):
+    """The physical specimen (tube) collected for an order. One tube per order."""
+
+    # Kinds of specimen the lab accepts (spec 6.3.2). Each entry is (value stored in DB, label shown to people).
+    class SampleType(models.TextChoices):
+        BLOOD = "blood", "Blood"
+        URINE = "urine", "Urine"
+        TISSUE = "tissue", "Tissue"
+
+    # The order this tube belongs to. One-to-one: one tube per order.
+    order = models.OneToOneField(TestOrder, on_delete=models.CASCADE, related_name="sample")
+
+    # Label printed on the tube. Set on first save to the order's ID, so machine result
+    # files that use the order ID keep matching. Not editable in forms or the admin.
+    barcode = models.CharField(max_length=20, unique=True, editable=False)
+
+    # One of the SampleType choices above.
+    sample_type = models.CharField(max_length=10, choices=SampleType.choices)
+
+    # Staff member who drew the sample. Empty until collected; kept empty if that account is removed.
+    collected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="collected_samples",
+    )
+
+    # When the sample was drawn. Empty means not collected yet.
+    collected_at = models.DateTimeField(null=True, blank=True)
+
+    # When the collector printed the label (first print only; reprints don't change it).
+    # Empty means not printed yet.
+    printed_at = models.DateTimeField(null=True, blank=True)
+
+    # Collector who printed the label the first time. Kept empty if that account is removed.
+    printed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="printed_samples",
+    )
+
+    def __str__(self):
+        return f"Sample {self.barcode} - {self.order.patient}"
+
+    @property
+    def is_collected(self):
+        return self.collected_at is not None
+
+    @property
+    def is_printed(self):
+        return self.printed_at is not None
+
+    def save(self, *args, **kwargs):
+        # Only fill in a missing barcode, so an existing label never changes.
+        if not self.barcode:
+            self.barcode = str(self.order_id)
+        super().save(*args, **kwargs)
+
+
 class Analyte:
     """One measured value on a panel: its machine Test ID, model field, units and normal range."""
 

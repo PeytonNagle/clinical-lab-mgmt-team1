@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import BMPResult, CBCResult, LipidResult, Patient, TestOrder, TestType
+from .models import BMPResult, CBCResult, LipidResult, Patient, Sample, TestOrder, TestType
 
 
 @admin.register(Patient)
@@ -35,6 +35,14 @@ class TestOrderAdmin(admin.ModelAdmin):
     )
     filter_horizontal = ("tests",)
     readonly_fields = ("created_at",)
+
+
+@admin.register(Sample)
+class SampleAdmin(admin.ModelAdmin):
+    list_display = ("barcode", "order", "sample_type", "collected_by", "collected_at")
+    list_filter = ("sample_type",)
+    search_fields = ("barcode",)
+    readonly_fields = ("barcode",)
 
 
 @admin.register(BMPResult, CBCResult, LipidResult)

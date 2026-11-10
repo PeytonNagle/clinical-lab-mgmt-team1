@@ -5,7 +5,7 @@ from pathlib import Path
 from django.conf import settings 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import connection
+from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -13,8 +13,9 @@ from django.utils import timezone
 
 from core.models import ActivityLog, User, STAFF_ROLES
 
+from .barcodes import barcode_svg
 from .importer import ParseError, import_results, parse_line
-from .models import BMPResult, CBCResult, LipidResult, Patient, TestOrder, TestType
+from .models import BMPResult, CBCResult, LipidResult, Patient, Sample, TestOrder, TestType
 from .phone import normalize_phone
 
 
@@ -609,6 +610,214 @@ class PanelResultModelTests(TestCase):
         self.assertEqual(result.patient, order.patient)
 
 
+class SampleModelTests(TestCase):
+    """SXFT-19 B1: one sample (tube) per order, barcoded with the order's ID."""
+
+    def test_barcode_is_set_to_the_order_id(self):
+        order = make_order()
+        sample = Sample.objects.create(order=order, sample_type=Sample.SampleType.BLOOD)
+        self.assertEqual(sample.barcode, str(order.pk))
+        self.assertEqual(str(sample), f"Sample {order.pk} - {order.patient}")
+
+    def test_barcodes_are_unique(self):
+        first = Sample.objects.create(order=make_order(), sample_type=Sample.SampleType.BLOOD)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Sample.objects.create(
+                order=make_order(), sample_type=Sample.SampleType.URINE, barcode=first.barcode
+            )
+
+    def test_only_one_sample_per_order(self):
+        order = make_order()
+        Sample.objects.create(order=order, sample_type=Sample.SampleType.BLOOD)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Sample.objects.create(order=order, sample_type=Sample.SampleType.URINE, barcode="other")
+
+    def test_is_collected_once_collected_at_is_set(self):
+        sample = Sample.objects.create(order=make_order(), sample_type=Sample.SampleType.BLOOD)
+        self.assertFalse(sample.is_collected)
+        sample.collected_at = timezone.now()
+        sample.save()
+        sample.refresh_from_db()
+        self.assertTrue(sample.is_collected)
+
+
+class BarcodeSvgTests(SimpleTestCase):
+    """SXFT-19 B2: Code 128 barcode rendered as inline SVG."""
+
+    def test_returns_inline_svg(self):
+        svg = barcode_svg("1234")
+        self.assertIn("<svg", svg)
+        self.assertFalse(svg.startswith("<?xml"))
+
+
+class SampleLabelViewTests(TestCase):
+    """SXFT-19 B2: printable label page, specimen collectors only (spec 6.3.4)."""
+
+    def setUp(self):
+        self.order = make_order()
+        self.sample = Sample.objects.create(order=self.order, sample_type=Sample.SampleType.BLOOD)
+        self.url = reverse("sample_label", args=[self.sample.pk])
+
+    def login_as(self, role):
+        user = User.objects.create_user(
+            username=role, password="s3cret-pass", role=role, must_change_password=False
+        )
+        self.client.force_login(user)
+
+    def test_specimen_collector_sees_label(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<svg")
+        self.assertContains(response, self.sample.barcode)
+        self.assertContains(response, self.order.patient.last_name)
+        self.assertContains(response, self.order.patient.first_name)
+        self.assertContains(response, "Not collected yet")
+
+    def test_technician_is_forbidden(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_anonymous_user_is_sent_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+    def test_unknown_sample_returns_404(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.client.get(reverse("sample_label", args=[self.sample.pk + 999]))
+        self.assertEqual(response.status_code, 404)
+
+
+class SamplePrintOnceTests(TestCase):
+    """SXFT-19 B3: a collector prints a label once; only the lab manager can reprint, with a reason."""
+
+    def setUp(self):
+        self.order = make_order()
+        self.sample = Sample.objects.create(order=self.order, sample_type=Sample.SampleType.BLOOD)
+        self.label_url = reverse("sample_label", args=[self.sample.pk])
+        self.print_url = reverse("sample_print", args=[self.sample.pk])
+        self.reprint_url = reverse("sample_reprint", args=[self.sample.pk])
+        self.collector = self.make_user(User.Role.SPECIMEN_COLLECTOR)
+        self.manager = self.make_user(User.Role.LAB_MANAGER)
+
+    def make_user(self, role):
+        return User.objects.create_user(
+            username=role, password="s3cret-pass", role=role, must_change_password=False
+        )
+
+    def print_as_collector(self):
+        self.client.force_login(self.collector)
+        return self.client.post(self.print_url)
+
+    def test_first_print_marks_sample_and_logs_it(self):
+        response = self.print_as_collector()
+        self.assertRedirects(response, f"{self.label_url}?print=1")
+        self.sample.refresh_from_db()
+        self.assertIsNotNone(self.sample.printed_at)
+        self.assertEqual(self.sample.printed_by, self.collector)
+        self.assertTrue(self.sample.is_printed)
+        log = ActivityLog.objects.get(action="label_printed")
+        self.assertEqual(log.user, self.collector)
+        self.assertEqual(log.patient, self.order.patient)
+        self.assertEqual(log.details, f"barcode {self.sample.barcode}")
+
+    def test_second_print_changes_nothing(self):
+        self.print_as_collector()
+        self.sample.refresh_from_db()
+        first_printed_at = self.sample.printed_at
+        response = self.client.post(self.print_url)
+        self.assertRedirects(response, self.label_url, fetch_redirect_response=False)
+        self.sample.refresh_from_db()
+        self.assertEqual(self.sample.printed_at, first_printed_at)
+        self.assertEqual(ActivityLog.objects.filter(action="label_printed").count(), 1)
+
+    def test_label_shows_once_right_after_printing_then_is_hidden(self):
+        response = self.client.get(self.print_as_collector()["Location"])
+        self.assertContains(response, "<svg")
+        self.assertContains(response, "window.print()")
+        # Reloading, even with ?print=1, no longer shows the label.
+        response = self.client.get(f"{self.label_url}?print=1")
+        self.assertNotContains(response, "<svg")
+        self.assertNotContains(response, "window.print()")
+        self.assertContains(response, "Label already printed on")
+        self.assertContains(response, "Ask the lab manager to reprint.")
+
+    def test_collector_label_page_hides_barcode_after_printing(self):
+        self.print_as_collector()
+        response = self.client.get(self.label_url)
+        self.assertNotContains(response, "<svg")
+        self.assertNotContains(response, 'class="barcode-value"')
+        self.assertContains(response, "Label already printed on")
+        self.assertNotContains(response, self.print_url)
+
+    def test_manager_can_reprint_with_a_reason(self):
+        self.print_as_collector()
+        self.sample.refresh_from_db()
+        original = (self.sample.printed_at, self.sample.printed_by)
+        self.client.force_login(self.manager)
+        response = self.client.post(self.reprint_url, {"reason": "label smudged"})
+        self.assertRedirects(response, f"{self.label_url}?print=1", fetch_redirect_response=False)
+        log = ActivityLog.objects.get(action="label_reprinted")
+        self.assertEqual(log.user, self.manager)
+        self.assertEqual(log.details, f"barcode {self.sample.barcode}, reason: label smudged")
+        self.sample.refresh_from_db()
+        self.assertEqual((self.sample.printed_at, self.sample.printed_by), original)
+        # The manager's label page prints automatically and offers another reprint.
+        response = self.client.get(response["Location"])
+        self.assertContains(response, "<svg")
+        self.assertContains(response, "window.print()")
+        self.assertContains(response, "Reason for reprint")
+
+    def test_reprint_needs_a_real_reason(self):
+        self.print_as_collector()
+        self.client.force_login(self.manager)
+        for reason in ("", "    ", "oops"):
+            with self.subTest(reason=reason):
+                response = self.client.post(self.reprint_url, {"reason": reason})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "is-invalid")
+                self.assertNotContains(response, "window.print()")
+        self.assertFalse(ActivityLog.objects.filter(action="label_reprinted").exists())
+
+    def test_reprint_before_first_print_is_refused(self):
+        self.client.force_login(self.manager)
+        response = self.client.post(self.reprint_url, {"reason": "label smudged"})
+        self.assertRedirects(response, self.label_url, fetch_redirect_response=False)
+        self.assertFalse(ActivityLog.objects.filter(action="label_reprinted").exists())
+
+    def test_manager_sees_label_but_no_print_button_before_first_print(self):
+        self.client.force_login(self.manager)
+        response = self.client.get(self.label_url)
+        self.assertContains(response, "<svg")
+        self.assertContains(response, "Waiting for the specimen collector to print")
+        self.assertNotContains(response, self.print_url)
+
+    def test_collector_cannot_reprint(self):
+        self.print_as_collector()
+        response = self.client.post(self.reprint_url, {"reason": "label smudged"})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ActivityLog.objects.filter(action="label_reprinted").exists())
+
+    def test_technician_is_forbidden_everywhere(self):
+        self.client.force_login(self.make_user(User.Role.TECHNICIAN))
+        self.assertEqual(self.client.get(self.label_url).status_code, 403)
+        for url in (self.print_url, self.reprint_url):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 403)
+                self.assertEqual(self.client.post(url, {"reason": "label smudged"}).status_code, 403)
+        self.sample.refresh_from_db()
+        self.assertFalse(self.sample.is_printed)
+
+    def test_print_and_reprint_are_post_only(self):
+        self.client.force_login(self.collector)
+        self.assertEqual(self.client.get(self.print_url).status_code, 405)
+        self.client.force_login(self.manager)
+        self.assertEqual(self.client.get(self.reprint_url).status_code, 405)
+        self.sample.refresh_from_db()
+        self.assertFalse(self.sample.is_printed)
+
+
 class ParseLineTests(TestCase):
     def test_reads_a_valid_line(self):
         line = parse_line("12|Test^GLU^Glucose|92.5|202610211340", 1)
@@ -1064,3 +1273,154 @@ class PatientHistoryEndToEndTests(TestCase):
         self.assertContains(response, "Aisha Patel")
         # The file summary has no patient (a file can cover several), so it isn't on this page.
         self.assertNotContains(response, "Results imported")
+
+
+class CollectorDashboardTests(TestCase):
+    """SXFT-19 B4: collectors see orders waiting for a specimen and collect them."""
+
+    def setUp(self):
+        self.order = make_order(["BMP", "CBC"])
+        self.url = reverse("collector_dashboard")
+        self.collect_url = reverse("collect_sample", args=[self.order.pk])
+
+    def login_as(self, role):
+        user = User.objects.create_user(
+            username=role, password="s3cret-pass", role=role, must_change_password=False
+        )
+        self.client.force_login(user)
+        return user
+
+    def collect(self, sample_type=Sample.SampleType.URINE):
+        return self.client.post(self.collect_url, {"sample_type": sample_type})
+
+    def test_collector_sees_waiting_order(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context["waiting"]), [self.order])
+        self.assertContains(response, f"#{self.order.pk}")
+        self.assertContains(response, str(self.order.patient))
+        self.assertContains(response, "BMP, CBC")
+        self.assertContains(response, self.collect_url)
+        self.assertContains(response, "Nothing collected today.")
+
+    def test_oldest_order_first(self):
+        newer = make_order()
+        TestOrder.objects.filter(pk=self.order.pk).update(created_at=timezone.now() - timedelta(days=1))
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.assertEqual(list(self.client.get(self.url).context["waiting"]), [self.order, newer])
+
+    def test_technician_is_forbidden(self):
+        self.login_as(User.Role.TECHNICIAN)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.assertEqual(self.collect().status_code, 403)
+        self.assertFalse(Sample.objects.exists())
+
+    def test_lab_manager_can_view_but_not_collect(self):
+        self.login_as(User.Role.LAB_MANAGER)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"#{self.order.pk}")
+        self.assertNotContains(response, self.collect_url)
+        self.assertNotContains(response, ">Collect</button>")
+        self.assertEqual(self.collect().status_code, 403)
+        self.assertFalse(Sample.objects.exists())
+
+    def test_collect_creates_sample_logs_and_goes_to_label(self):
+        collector = self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.collect(Sample.SampleType.URINE)
+        sample = Sample.objects.get(order=self.order)
+        self.assertRedirects(response, reverse("sample_label", args=[sample.pk]))
+        self.assertEqual(sample.collected_by, collector)
+        self.assertIsNotNone(sample.collected_at)
+        self.assertEqual(sample.sample_type, Sample.SampleType.URINE)
+        log = ActivityLog.objects.get(action="sample_collected")
+        self.assertEqual(log.user, collector)
+        self.assertEqual(log.patient, self.order.patient)
+        self.assertEqual(log.details, f"order {self.order.pk}, barcode {sample.barcode}, Urine")
+
+    def test_collect_uses_existing_uncollected_sample(self):
+        sample = Sample.objects.create(order=self.order, sample_type=Sample.SampleType.BLOOD)
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.assertRedirects(self.collect(Sample.SampleType.TISSUE), reverse("sample_label", args=[sample.pk]))
+        sample.refresh_from_db()
+        self.assertTrue(sample.is_collected)
+        self.assertEqual(sample.sample_type, Sample.SampleType.TISSUE)
+        self.assertEqual(Sample.objects.count(), 1)
+
+    def test_collecting_twice_changes_nothing(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.collect(Sample.SampleType.URINE)
+        first = Sample.objects.get(order=self.order)
+        response = self.collect(Sample.SampleType.BLOOD)
+        self.assertRedirects(response, self.url)
+        second = Sample.objects.get(order=self.order)
+        self.assertEqual(second.collected_at, first.collected_at)
+        self.assertEqual(second.sample_type, Sample.SampleType.URINE)
+        self.assertEqual(ActivityLog.objects.filter(action="sample_collected").count(), 1)
+
+    def test_collected_order_moves_to_collected_today(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.collect()
+        sample = Sample.objects.get(order=self.order)
+        response = self.client.get(self.url)
+        self.assertEqual(list(response.context["waiting"]), [])
+        self.assertEqual(list(response.context["collected_today"]), [sample])
+        self.assertContains(response, "No orders waiting.")
+        self.assertContains(response, "Print label")
+        # After the label is printed, the row shows a badge instead.
+        Sample.objects.filter(pk=sample.pk).update(printed_at=timezone.now())
+        response = self.client.get(self.url)
+        self.assertNotContains(response, "Print label")
+        self.assertContains(response, ">Printed</a>")
+
+    def test_samples_collected_before_today_are_not_listed(self):
+        Sample.objects.create(
+            order=self.order, sample_type=Sample.SampleType.BLOOD,
+            collected_at=timezone.now() - timedelta(days=2),
+        )
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.client.get(self.url)
+        self.assertEqual(list(response.context["collected_today"]), [])
+        self.assertEqual(list(response.context["waiting"]), [])
+
+    def test_inactive_patients_and_completed_orders_are_not_listed(self):
+        completed = make_order()
+        TestOrder.objects.filter(pk=completed.pk).update(status=TestOrder.Status.COMPLETED)
+        self.order.patient.deactivate()
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.assertEqual(list(self.client.get(self.url).context["waiting"]), [])
+        # Posting directly is refused too.
+        self.assertRedirects(self.collect(), self.url)
+        self.assertFalse(Sample.objects.exists())
+
+    def test_collect_is_post_only_and_needs_a_valid_type(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.assertEqual(self.client.get(self.collect_url).status_code, 405)
+        self.assertRedirects(self.collect("plasma"), self.url)
+        self.assertFalse(Sample.objects.exists())
+
+    def test_unknown_order_returns_404(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.client.post(reverse("collect_sample", args=[self.order.pk + 999]), {"sample_type": "blood"})
+        self.assertEqual(response.status_code, 404)
+
+    def test_query_count_does_not_grow_with_rows(self):
+        collector = self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        Sample.objects.create(
+            order=make_order(), sample_type=Sample.SampleType.BLOOD,
+            collected_at=timezone.now(), collected_by=collector,
+        )
+        with CaptureQueriesContext(connection) as few:
+            self.client.get(self.url)
+        for _ in range(3):
+            make_order(["BMP", "CBC"])
+            Sample.objects.create(order=make_order(), sample_type=Sample.SampleType.URINE)
+            Sample.objects.create(
+                order=make_order(), sample_type=Sample.SampleType.BLOOD,
+                collected_at=timezone.now(), collected_by=collector,
+            )
+        with CaptureQueriesContext(connection) as many:
+            response = self.client.get(self.url)
+        self.assertEqual(len(response.context["waiting"]), 7)
+        self.assertEqual(len(few), len(many))

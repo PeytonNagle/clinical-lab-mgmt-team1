@@ -2,7 +2,7 @@ from django import forms
 from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
 
-from .models import SELF_PAY, Patient, TestOrder, TestType
+from .models import SELF_PAY, Patient, Sample, TestOrder, TestType
 from .phone import PhoneField
 
 
@@ -121,6 +121,23 @@ class TestOrderForm(forms.ModelForm):
         """Active patients' insurance by id, used for the first fill and for the page script on pick."""
         rows = self.fields["patient"].queryset.values("pk", "insurance_provider", "insurance_policy_number")
         return {str(row["pk"]): row for row in rows}
+
+
+class CollectSampleForm(forms.Form):
+    """What kind of specimen the collector drew for an order."""
+
+    sample_type = forms.ChoiceField(choices=Sample.SampleType.choices)
+
+
+class LabelReprintForm(forms.Form):
+    """Why the lab manager is reprinting a label that was already printed. Saved in the activity log."""
+
+    # Spaces are trimmed before the length check, so "    " doesn't count as a reason.
+    reason = forms.CharField(
+        min_length=5,
+        max_length=255,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "e.g. label smudged"}),
+    )
 
 
 class ResultUploadForm(forms.Form):

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Collect samples | CLMS{% endblock %}
+
+{% block content %}
+    <h1 class="h3 mb-3">Collect samples</h1>
+
+    <h2 class="h5">Waiting for collection</h2>
+    <div class="card shadow-sm mb-4">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Report ID</th>
+                        <th>Order date</th>
+                        <th>Patient</th>
+                        <th>Date of birth</th>
+                        <th>Tests</th>
+                        <th>Source</th>
+                        {% if can_collect %}<th>Collect</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for order in waiting %}
+                        <tr>
+                            <td>#{{ order.pk }}</td>
+                            <td>{{ order.created_at|date:"M j, Y, g:i a" }}</td>
+                            <td>{{ order.patient }}</td>
+                            <td>{{ order.patient.date_of_birth|date:"m/d/Y" }}</td>
+                            <td title="{% for test in order.tests.all %}{{ test.name }}{% if not forloop.last %}, {% endif %}{% endfor %}">
+                                {% for test in order.tests.all %}{{ test.code }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                            </td>
+                            <td>{{ order.get_source_display }}</td>
+                            {% if can_collect %}
+                                <td>
+                                    <form method="post" action="{% url 'collect_sample' order.pk %}" class="d-flex gap-2 m-0">
+                                        {% csrf_token %}
+                                        <select name="sample_type" class="form-select form-select-sm" style="width: auto;"
+                                                aria-label="Sample type for order {{ order.pk }}" required>
+                                            {% for value, label in sample_types %}
+                                                <option value="{{ value }}"{% if order.sample.sample_type == value %} selected{% endif %}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-primary">Collect</button>
+                                    </form>
+                                </td>
+                            {% endif %}
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="{% if can_collect %}7{% else %}6{% endif %}" class="text-center text-muted py-4">No orders waiting.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <h2 class="h5">Collected today</h2>
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Barcode</th>
+                        <th>Patient</th>
+                        <th>Collected by</th>
+                        <th>Time</th>
+                        <th>Label</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sample in collected_today %}
+                        <tr>
+                            <td class="font-monospace">{{ sample.barcode }}</td>
+                            <td>{{ sample.order.patient }}</td>
+                            <td>
+                                {% if sample.collected_by %}{{ sample.collected_by.get_full_name|default:sample.collected_by.username }}{% else %}—{% endif %}
+                            </td>
+                            <td>{{ sample.collected_at|date:"g:i a" }}</td>
+                            <td>
+                                {% if sample.is_printed %}
+                                    <a href="{% url 'sample_label' sample.pk %}" class="badge text-bg-success text-decoration-none">Printed</a>
+                                {% else %}
+                                    {# Only the collector prints the first label (B3); the manager can just look. #}
+                                    <a href="{% url 'sample_label' sample.pk %}" class="btn btn-sm btn-outline-primary">{% if can_collect %}Print label{% else %}View label{% endif %}</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="5" class="text-center text-muted py-4">Nothing collected today.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endblock %}

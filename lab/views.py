@@ -4,14 +4,18 @@ from django.db import transaction
 from django.db.models import Q, Value
 from django.db.models.functions import Replace
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from core.decorators import role_required
 from core.models import STAFF_ROLES, User
 from core.utils import log_event
 
-from .forms import PatientForm, ResultUploadForm, TestOrderForm
+from .barcodes import barcode_svg
+from .forms import CollectSampleForm, LabelReprintForm, PatientForm, ResultUploadForm, TestOrderForm
 from .importer import import_results
-from .models import PANEL_MODELS, Patient, TestOrder
+from .models import PANEL_MODELS, Patient, Sample, TestOrder
 from .phone import phone_digits
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
@@ -173,3 +177,156 @@ def result_upload(request):
         )
         form = ResultUploadForm()
     return render(request, "lab/result_upload.html", {"form": form, "report": report})
+
+
+# Session key: ids of samples this user just printed. Each id lets the label show once more,
+# so the browser can print it right after the first print; a reload shows "already printed".
+JUST_PRINTED_KEY = "just_printed_samples"
+
+
+def label_url(pk, auto_print=False):
+    url = reverse("sample_label", args=[pk])
+    return f"{url}?print=1" if auto_print else url
+
+
+def get_sample(pk):
+    return get_object_or_404(Sample.objects.select_related("order__patient", "printed_by"), pk=pk)
+
+
+def render_label(request, sample, reprint_form=None):
+    """The label page for a collector or the lab manager (see the template for the four states)."""
+    is_manager = request.user.role == User.Role.LAB_MANAGER
+    wants_print = request.GET.get("print") == "1"
+    just_printed = False
+    if not is_manager and sample.is_printed and wants_print:
+        # Use up this sample's one-time pass (only the ?print=1 redirect from sample_print uses it).
+        passes = request.session.get(JUST_PRINTED_KEY, [])
+        if sample.pk in passes:
+            passes.remove(sample.pk)
+            request.session[JUST_PRINTED_KEY] = passes
+            just_printed = True
+    show_label = is_manager or not sample.is_printed or just_printed
+    auto_print = wants_print and (just_printed or (is_manager and sample.is_printed))
+    return render(
+        request,
+        "lab/sample_label.html",
+        {
+            "sample": sample,
+            "order": sample.order,
+            "patient": sample.order.patient,
+            "is_manager": is_manager,
+            "show_label": show_label,
+            "auto_print": auto_print,
+            "barcode_svg": barcode_svg(sample.barcode) if show_label else "",
+            "reprint_form": reprint_form or LabelReprintForm(),
+        },
+    )
+
+
+@role_required(User.Role.SPECIMEN_COLLECTOR, User.Role.LAB_MANAGER)
+def sample_label(request, pk):
+    """Printable tube label with the sample's Code 128 barcode (spec 6.3.4)."""
+    return render_label(request, get_sample(pk))
+
+
+@role_required(User.Role.SPECIMEN_COLLECTOR)
+@require_POST
+def sample_print(request, pk):
+    """First and only print by a collector. Later prints need the lab manager (sample_reprint)."""
+    sample = get_sample(pk)
+    with transaction.atomic():
+        # One UPDATE that only matches an unprinted sample, so a double click can't print twice.
+        updated = Sample.objects.filter(pk=pk, printed_at__isnull=True).update(
+            printed_at=timezone.now(), printed_by=request.user
+        )
+        if updated == 1:
+            log_event(request.user, "label_printed", patient=sample.order.patient, details=f"barcode {sample.barcode}")
+    if updated == 0:
+        messages.error(request, "This label has already been printed. Ask the lab manager to reprint it.")
+        return redirect(label_url(pk))
+    request.session[JUST_PRINTED_KEY] = request.session.get(JUST_PRINTED_KEY, []) + [sample.pk]
+    return redirect(label_url(pk, auto_print=True))
+
+
+@role_required(User.Role.LAB_MANAGER)
+@require_POST
+def sample_reprint(request, pk):
+    """Lab manager reprints an already printed label and must give a reason.
+
+    The original printed_at and printed_by stay as they are; the reprint is recorded in the activity log.
+    """
+    sample = get_sample(pk)
+    if not sample.is_printed:
+        messages.error(request, "This label hasn't been printed yet, so there is nothing to reprint.")
+        return redirect(label_url(pk))
+    form = LabelReprintForm(request.POST)
+    if not form.is_valid():
+        return render_label(request, sample, reprint_form=form)
+    log_event(
+        request.user,
+        "label_reprinted",
+        patient=sample.order.patient,
+        details=f"barcode {sample.barcode}, reason: {form.cleaned_data['reason']}",
+    )
+    return redirect(label_url(pk, auto_print=True))
+
+
+@role_required(User.Role.SPECIMEN_COLLECTOR, User.Role.LAB_MANAGER)
+def collector_dashboard(request):
+    """Orders waiting for a specimen, and what was collected today. The lab manager can only look."""
+    waiting = (
+        TestOrder.objects.filter(status=TestOrder.Status.PENDING, patient__is_active=True)
+        .filter(Q(sample__isnull=True) | Q(sample__collected_at__isnull=True))
+        .select_related("patient", "sample")
+        .prefetch_related("tests")
+        .order_by("created_at")
+    )
+    collected_today = (
+        Sample.objects.filter(collected_at__date=timezone.localdate())
+        .select_related("order__patient", "collected_by")
+        .order_by("-collected_at")
+    )
+    return render(
+        request,
+        "lab/collector_dashboard.html",
+        {
+            "waiting": waiting,
+            "collected_today": collected_today,
+            "can_collect": request.user.role == User.Role.SPECIMEN_COLLECTOR,
+            "sample_types": Sample.SampleType.choices,
+        },
+    )
+
+
+@role_required(User.Role.SPECIMEN_COLLECTOR)
+@require_POST
+def collect_sample(request, order_id):
+    """Record that the collector drew the specimen for this order, then go to its label."""
+    order = get_object_or_404(TestOrder.objects.select_related("patient"), pk=order_id)
+    if order.status != TestOrder.Status.PENDING or not order.patient.is_active:
+        messages.error(request, f"Order #{order.pk} isn't waiting for collection.")
+        return redirect("collector_dashboard")
+    form = CollectSampleForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, f"Choose a sample type for order #{order.pk}.")
+        return redirect("collector_dashboard")
+    sample_type = form.cleaned_data["sample_type"]
+    with transaction.atomic():
+        sample, _ = Sample.objects.get_or_create(order=order, defaults={"sample_type": sample_type})
+        # One UPDATE that only matches an uncollected sample, so a double click can't collect twice.
+        updated = Sample.objects.filter(pk=sample.pk, collected_at__isnull=True).update(
+            collected_at=timezone.now(), collected_by=request.user, sample_type=sample_type
+        )
+        if updated == 1:
+            type_label = Sample.SampleType(sample_type).label
+            log_event(
+                request.user,
+                "sample_collected",
+                patient=order.patient,
+                details=f"order {order.pk}, barcode {sample.barcode}, {type_label}",
+            )
+    if updated == 0:
+        messages.error(request, f"The sample for order #{order.pk} has already been collected.")
+        return redirect("collector_dashboard")
+    messages.success(request, f"Sample {sample.barcode} collected for {order.patient}. Print its label now.")
+    return redirect("sample_label", pk=sample.pk)
