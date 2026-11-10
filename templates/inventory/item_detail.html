@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}{{ item }} | CLMS{% endblock %}
+
+{% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3 m-0">{{ item }}</h1>
+        <a href="{% url 'item_list' %}">&lsaquo; All inventory</a>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+        <span class="fs-5 me-2">
+            {{ on_hand }} {{ item.unit }} in stock
+            {% if not on_hand %}<span class="badge text-bg-danger align-middle">Out of stock</span>{% endif %}
+        </span>
+        <a class="btn btn-primary" href="{% url 'lot_receive' item.pk %}">Receive delivery</a>
+        <a class="btn btn-outline-secondary" href="{% url 'item_update' item.pk %}">Edit item</a>
+        <a class="btn btn-outline-danger" href="{% url 'item_remove' item.pk %}">Remove item</a>
+    </div>
+
+    <p class="text-muted">
+        {% if used_by %}
+            Used per test:
+            {% for need in used_by %}{{ need.test_type.code }} {{ need.quantity }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+            Running a test uses the lot that expires first.
+        {% else %}
+            No test uses this item, so running tests doesn't change its stock.
+        {% endif %}
+    </p>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Lot</th>
+                        <th class="text-end">Left</th>
+                        <th>Expires</th>
+                        <th>Received</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lot in lots %}
+                        <tr{% if lot.expiry_date < today %} class="table-danger"{% elif not lot.quantity %} class="text-muted"{% endif %}>
+                            <td>{{ lot.lot_number }}</td>
+                            <td class="text-end">{{ lot.quantity }} {{ item.unit }}</td>
+                            <td>
+                                {{ lot.expiry_date|date:"Y-m-d" }}
+                                {% if lot.expiry_date < today %}<span class="badge text-bg-danger">Expired</span>{% endif %}
+                            </td>
+                            <td>
+                                {{ lot.received_at|date:"Y-m-d" }}
+                                &middot; {{ lot.received_by.get_full_name|default:lot.received_by.username }}
+                            </td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-secondary" href="{% url 'lot_update' lot.pk %}">Edit</a>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">No deliveries yet.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endblock %}

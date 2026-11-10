@@ -63,6 +63,16 @@
             <p class="text-muted">Nothing was saved.</p>
         {% endfor %}
 
+        {% if report.stock_warnings %}
+            <h2 class="h5 mt-4">Stock warnings ({{ report.stock_warnings|length }})</h2>
+            <p class="text-muted">These results were saved, but the supplies they used were not all in stock. Tell the lab manager.</p>
+            <ul class="list-group mb-4">
+                {% for where, message in report.stock_warnings %}
+                    <li class="list-group-item list-group-item-warning"><strong>{{ where }}:</strong> {{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
         {% if report.rejected %}
             <h2 class="h5 mt-4">Rejected ({{ report.rejected|length }})</h2>
             <ul class="list-group mb-4">
