@@ -1,6 +1,7 @@
 from datetime import timedelta
 from io import StringIO
 
+from axes.models import AccessAttempt
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import CommandError, call_command
 from django.template import RequestContext, Template
@@ -108,6 +109,54 @@ class StaffLoginTests(TestCase):
         response = self.login("pat1")
         self.assertFalse(response.context["user"].is_authenticated)
         self.assertContains(response, "Patient accounts can&#x27;t sign in here.")
+
+
+class LockoutTests(TestCase):
+    def setUp(self):
+        User.objects.create_user(
+            username="tech1", password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
+        )
+
+    def login(self, password="s3cret-pass", username="tech1"):
+        return self.client.post("/accounts/login/", {"username": username, "password": password})
+
+    def fail(self, times):
+        for _ in range(times):
+            self.login(password="wrong")
+
+    def assert_logged_in(self, response):
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("_auth_user_id", self.client.session)
+
+    def test_four_failures_still_allow_login(self):
+        self.fail(4)
+        self.assert_logged_in(self.login())
+
+    def test_fifth_failure_locks_the_account(self):
+        self.fail(5)
+        response = self.login()
+        self.assertEqual(response.status_code, 429)
+        self.assertContains(response, "locked", status_code=429)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_success_resets_the_count(self):
+        self.fail(4)
+        self.assert_logged_in(self.login())
+        self.client.logout()
+        self.fail(4)
+        self.assert_logged_in(self.login())
+
+    def test_lock_does_not_expire(self):
+        self.fail(5)
+        AccessAttempt.objects.update(attempt_time=timezone.now() - timedelta(days=30))
+        self.assertEqual(self.login().status_code, 429)
+
+    def test_lock_is_per_username(self):
+        User.objects.create_user(
+            username="tech2", password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
+        )
+        self.fail(5)
+        self.assert_logged_in(self.login(username="tech2"))
 
 
 class PasswordTests(TestCase):

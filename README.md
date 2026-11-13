@@ -36,6 +36,17 @@ Every account uses the password `TestPass123!`.
 Only lab managers can create accounts, so whoever installs the system creates the first one:
 `python manage.py create_lab_manager <username> [--email EMAIL]`. It prints a temporary password, which the manager must change on first login.
 
+### Account lockout
+
+Five wrong passwords in a row lock that username (django-axes). A correct password before the fifth resets the count.
+The lock never expires on its own. The username is locked, not the computer, so others can still sign in from the same machine.
+
+To unlock an account, run this on the server:
+
+```sh
+python manage.py axes_reset_username <username>
+```
+
 ## Folders
 
 | Folder         | What goes in                                                                        | When                           |

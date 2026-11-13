@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'lab',
     'inventory',
     'billing',
+    'axes',
 ]
 
 MIDDLEWARE = [
@@ -56,6 +57,8 @@ MIDDLEWARE = [
     'core.middleware.ForcePasswordChangeMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # Last, so it can turn a locked-out login into the lockout page
+    'axes.middleware.AxesMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -92,6 +95,11 @@ DATABASES = {
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
+
+AUTHENTICATION_BACKENDS = [
+    "axes.backends.AxesStandaloneBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -135,3 +143,13 @@ AUTH_USER_MODEL = "core.User"
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
+
+# Account lockout (django-axes). Spec: lock after 5 failed logins in a row,
+# and only a lab manager can unlock, so the lock never expires on its own.
+AXES_FAILURE_LIMIT = 5
+AXES_LOCKOUT_PARAMETERS = ["username"]
+AXES_COOLOFF_TIME = None
+AXES_RESET_ON_SUCCESS = True
+AXES_LOCKOUT_TEMPLATE = "registration/locked_out.html"
+# Lock the account, not the IP: lab staff share workstations, and the spec locks a user.
+SILENCED_SYSTEM_CHECKS = ["axes.W006"]

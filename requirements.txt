@@ -5,3 +5,4 @@ pytest
 pytest-django
 phonenumbers
 python-barcode
+django-axes==9.0.0
