@@ -1,8 +1,9 @@
 from datetime import timedelta
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, transaction, connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -373,3 +374,26 @@ class SupplyCheckTests(TestCase):
         self.stock_bmp()
         check_supplies(["BMP"])
         self.assertEqual(on_hand(self.tips), 10)
+    def test_mixed_lots_pass_if_enough_unexpired_stock(self):
+        self.stock_bmp(tips=1)
+        add_lot(self.tips, 5, days_left=-1, lot_number="P-OLD")   # expired, doesn't count
+        add_lot(self.tips, 1, days_left=10, lot_number="P-2")     # 1 + 1 = the 2 tips a BMP needs
+        self.assertEqual(check_supplies(["BMP"]), [])
+
+    def test_mixed_lots_block_if_unexpired_stock_is_short(self):
+        self.stock_bmp(tips=1)
+        add_lot(self.tips, 5, days_left=-1, lot_number="P-OLD")
+        problems = check_supplies(["BMP"])
+        self.assertEqual([item for item, _ in problems], [self.tips])
+        self.assertIn("expired", problems[0][1])
+
+    def test_no_stock_at_all_is_out_of_stock(self):
+        problems = check_supplies(["BMP"])
+        self.assertEqual(len(problems), 3)
+        self.assertTrue(all("out of stock" in message for _, message in problems))
+
+    def test_check_makes_no_database_writes(self):
+        self.stock_bmp()
+        with CaptureQueriesContext(connection) as queries:
+            check_supplies(["BMP"])
+        self.assertTrue(all(q["sql"].lstrip().upper().startswith("SELECT") for q in queries))

@@ -349,7 +349,8 @@ def supply_check(request, pk):
             raise PermissionDenied
         if problems:
             reasons = "; ".join(message for _, message in problems)
-            log_event(request.user, "test_blocked", patient=order.patient, details=f"order {order.pk}: {reasons}")
+            tests = ", ".join(test.code for test in order.tests.all())
+            log_event(request.user, "test_blocked", patient=order.patient,details=f"order {order.pk}, sample {sample.barcode}, tests {tests}: {reasons}")            
             messages.warning(request, f"Order #{order.pk} is blocked. {reasons}")
             return redirect("supply_check", pk=pk)
         messages.success(request, f"Supplies are ready for order #{order.pk}. Send the sample to the lab.")
