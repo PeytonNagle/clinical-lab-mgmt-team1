@@ -47,6 +47,26 @@ To unlock an account, run this on the server:
 python manage.py axes_reset_username <username>
 ```
 
+When an account locks, every active lab manager with an email address gets one email, and the lockout goes in the activity log.
+
+### Email
+
+With no email settings, emails print in the `runserver` terminal. To catch them in an inbox instead, use a free [Mailtrap](https://mailtrap.io) sandbox. It never delivers to real addresses.
+
+1. In Mailtrap, open **Sandboxes**, pick your sandbox, and copy the SMTP username and password.
+2. Add them to `.env` (see `.env.example`):
+
+   ```sh
+   EMAIL_HOST=sandbox.smtp.mailtrap.io
+   EMAIL_PORT=2525
+   EMAIL_HOST_USER=<username>
+   EMAIL_HOST_PASSWORD=<password>
+   ```
+
+3. Restart `runserver`. Lockout emails now show up in the Mailtrap sandbox.
+
+Sending real email later only means pointing these settings at a real mail server. If sending fails, sign-in still works and the failure goes in the activity log.
+
 ## Folders
 
 | Folder         | What goes in                                                                        | When                           |
