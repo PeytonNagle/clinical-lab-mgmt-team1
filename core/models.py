@@ -72,3 +72,24 @@ class ActivityLog(models.Model):
     def action_label(self):
         """The action in readable form, e.g. "order_created" -> "Order created"."""
         return self.action.replace("_", " ").capitalize()
+
+class LabInfo(models.Model):
+    name = models.CharField(max_length=150)
+    address = models.TextField()
+    phone = models.CharField(max_length=20)
+    hours = models.CharField(max_length=200, help_text="For example: Mon–Fri 7am–5pm, Sat 8am–noon")
+
+    class Meta:
+        verbose_name = "lab info"
+        verbose_name_plural = "lab info"
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        return cls.objects.filter(pk=1).first()

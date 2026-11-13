@@ -1,7 +1,8 @@
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
 
-from .models import STAFF_ROLES, User
+from lab.phone import PhoneField
+from .models import STAFF_ROLES, User, LabInfo
 
 
 class StaffLoginForm(AuthenticationForm):
@@ -41,3 +42,15 @@ class RegistrationForm(forms.ModelForm):
             if value in STAFF_ROLES
         ]
 
+class LabInfoForm(forms.ModelForm):
+    class Meta:
+        model = LabInfo
+        fields = ["name", "address", "phone", "hours"]
+        labels = {"name": "Lab name"}
+        field_classes = {"phone": PhoneField}
+        widgets = {
+            "name": forms.TextInput(attrs={"class": "form-control"}),
+            "address": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
+            "phone": forms.TextInput(attrs={"class": "form-control"}),
+            "hours": forms.TextInput(attrs={"class": "form-control"}),
+        }

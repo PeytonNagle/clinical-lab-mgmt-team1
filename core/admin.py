@@ -1,8 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import ActivityLog, User
-
+from .models import ActivityLog, User, LabInfo
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
@@ -31,3 +30,11 @@ class ActivityLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+@admin.register(LabInfo)
+class LabInfoAdmin(admin.ModelAdmin):
+    list_display = ("name", "phone", "hours")
+
+    def has_add_permission(self, request):
+        # Only one row: add it once, then edit it.
+        return not LabInfo.objects.exists()

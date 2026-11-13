@@ -7,8 +7,10 @@ from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.contrib.auth.decorators import login_required
 
-from .forms import FirstPasswordForm, RegistrationForm
-from .models import STAFF_ROLES, User
+from .decorators import role_required
+from .forms import FirstPasswordForm, LabInfoForm, RegistrationForm
+from .models import STAFF_ROLES, LabInfo, User
+from .utils import log_event
 import secrets
 
 def home(request):
@@ -74,3 +76,16 @@ def register_staff(request):
         form = RegistrationForm()
 
     return render(request, "core/register_staff.html", {"form": form})
+
+
+
+@role_required(User.Role.LAB_MANAGER)
+def lab_info(request):
+    """SXFT-16: the lab manager saves the lab's name, address and hours"""
+    form = LabInfoForm(request.POST or None, instance=LabInfo.load())
+    if request.method == "POST" and form.is_valid():
+        info = form.save()
+        log_event(request.user, "lab_info_updated", details=info.name)
+        messages.success(request, "Lab info saved.")
+        return redirect("lab_info")
+    return render(request, "core/lab_info_form.html", {"form": form})
