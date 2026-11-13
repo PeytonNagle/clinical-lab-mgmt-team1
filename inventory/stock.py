@@ -36,3 +36,20 @@ def use_supplies(test_code):
         if remaining:
             shortages.append((need.item, remaining))
     return shortages
+
+def check_supplies(test_codes):
+    needed = {}
+    for need in TestSupply.objects.filter(test_type__code__in=test_codes, item__is_active=True).select_related("item"):
+        needed[need.item] = needed.get(need.item, 0) + need.quantity
+
+    today = timezone.localdate()
+    problems = []
+    for item, amount in needed.items():
+        good = on_hand(item)
+        if good >= amount:
+            continue
+        if item.lots.filter(quantity__gt=0, expiry_date__lt=today).exists():
+            problems.append((item, f"{item} is expired: only {good} of {amount} {item.unit} usable"))
+        else:
+            problems.append((item, f"{item} is low: {good} of {amount} {item.unit} in stock"))
+    return problems

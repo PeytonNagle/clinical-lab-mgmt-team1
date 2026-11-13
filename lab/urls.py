@@ -17,4 +17,5 @@ urlpatterns = [
     path("samples/<int:pk>/reprint/", views.sample_reprint, name="sample_reprint"),
     path("lab/collect/", views.collector_dashboard, name="collector_dashboard"),
     path("lab/collect/<int:order_id>/", views.collect_sample, name="collect_sample"),
+    path("lab/collect/samples/<int:pk>/supplies/", views.supply_check, name="supply_check"),
 ]

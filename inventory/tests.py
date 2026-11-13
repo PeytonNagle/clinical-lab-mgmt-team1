@@ -11,7 +11,7 @@ from lab.importer import import_results
 from lab.tests import bmp_lines, cbc_lines, make_order
 
 from .models import StockLot, SupplyItem, TestSupply
-from .stock import on_hand, use_supplies
+from .stock import on_hand, use_supplies, check_supplies
 
 TODAY = timezone.localdate()
 
@@ -338,3 +338,38 @@ class UploadShowsStockWarningsTests(TestCase):
         self.assertContains(response, "Saved (1)")
         self.assertContains(response, "Stock warnings (3)")
         self.assertContains(response, "Pipette tips ran out, 2 tips short")
+
+
+class SupplyCheckTests(TestCase):
+    """SXFT-23: before a test runs, every supply must be in stock and not expired."""
+
+    def setUp(self):
+        self.tube = supply("Serum separator tube (gold top)")
+        self.cartridge = supply("BMP reagent cartridge")
+        self.tips = supply("Pipette tips")
+
+    def stock_bmp(self, tips=10, tip_days_left=30):
+        add_lot(self.tube, 10, lot_number="T-1")
+        add_lot(self.cartridge, 10, lot_number="C-1")
+        add_lot(self.tips, tips, days_left=tip_days_left, lot_number="P-1")
+
+    def test_in_stock_passes(self):
+        self.stock_bmp()
+        self.assertEqual(check_supplies(["BMP"]), [])
+
+    def test_expired_blocks(self):
+        self.stock_bmp(tip_days_left=-1)
+        problems = check_supplies(["BMP"])
+        self.assertEqual([item for item, _ in problems], [self.tips])
+        self.assertIn("expired", problems[0][1])
+
+    def test_too_little_stock_blocks(self):
+        self.stock_bmp(tips=1)
+        problems = check_supplies(["BMP"])
+        self.assertEqual([item for item, _ in problems], [self.tips])
+        self.assertIn("low", problems[0][1])
+
+    def test_checking_does_not_use_stock(self):
+        self.stock_bmp()
+        check_supplies(["BMP"])
+        self.assertEqual(on_hand(self.tips), 10)

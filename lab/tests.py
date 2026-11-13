@@ -12,6 +12,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from core.models import ActivityLog, User, STAFF_ROLES
+from inventory.models import StockLot, TestSupply
 
 from .barcodes import barcode_svg
 from .importer import ParseError, import_results, parse_line
@@ -1424,3 +1425,55 @@ class CollectorDashboardTests(TestCase):
             response = self.client.get(self.url)
         self.assertEqual(len(response.context["waiting"]), 7)
         self.assertEqual(len(few), len(many))
+
+
+class SupplyCheckPageTests(TestCase):
+    """SXFT-23: the collector checks supplies before a test runs; problems block it and are logged."""
+
+    def setUp(self):
+        self.collector = self.make_user("collector", User.Role.SPECIMEN_COLLECTOR)
+        self.manager = self.make_user("manager", User.Role.LAB_MANAGER)
+        self.sample = Sample.objects.create(
+            order=make_order(["BMP"]), sample_type=Sample.SampleType.BLOOD,
+            collected_at=timezone.now(), collected_by=self.collector,
+        )
+        self.url = reverse("supply_check", args=[self.sample.pk])
+
+    def make_user(self, username, role):
+        return User.objects.create_user(username=username, role=role, must_change_password=False)
+
+    def stock(self, days_left=30):
+        for need in TestSupply.objects.filter(test_type__code="BMP"):
+            StockLot.objects.create(
+                item=need.item, lot_number="LOT-1", quantity=10, received_by=self.manager,
+                expiry_date=timezone.localdate() + timedelta(days=days_left),
+            )
+
+    def test_in_stock_lets_the_test_run(self):
+        self.stock()
+        self.client.force_login(self.collector)
+        self.assertContains(self.client.get(self.url), "All supplies are in stock")
+        self.assertRedirects(self.client.post(self.url), reverse("collector_dashboard"))
+        self.assertFalse(ActivityLog.objects.filter(action="test_blocked").exists())
+
+    def test_expired_supplies_block_and_are_logged(self):
+        self.stock(days_left=-1)
+        self.client.force_login(self.collector)
+        self.assertContains(self.client.get(self.url), "expired")
+        self.assertRedirects(self.client.post(self.url), self.url)
+        log = ActivityLog.objects.get(action="test_blocked")
+        self.assertEqual(log.patient, self.sample.order.patient)
+
+    def test_no_stock_blocks(self):
+        self.client.force_login(self.collector)
+        self.assertRedirects(self.client.post(self.url), self.url)
+        self.assertTrue(ActivityLog.objects.filter(action="test_blocked").exists())
+
+    def test_manager_can_look_but_not_run(self):
+        self.client.force_login(self.manager)
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+        self.assertEqual(self.client.post(self.url).status_code, 403)
+
+    def test_other_roles_are_forbidden(self):
+        self.client.force_login(self.make_user("tech", User.Role.TECHNICIAN))
+        self.assertEqual(self.client.get(self.url).status_code, 403)
