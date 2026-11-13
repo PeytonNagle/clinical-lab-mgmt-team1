@@ -5,11 +5,12 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.management import CommandError, call_command
 from django.template import RequestContext, Template
 from django.test import RequestFactory, TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from lab.models import Patient
 
-from .models import ActivityLog, User
+from .models import ActivityLog, User, LabInfo
 from .utils import log_event
 
 
@@ -253,3 +254,66 @@ class ActivityLogTests(TestCase):
         ActivityLog.objects.filter(pk=old.pk).update(timestamp=timezone.now() - timedelta(minutes=5))
 
         self.assertEqual(list(ActivityLog.objects.all()), [new, old])
+
+
+class LabInfoTests(TestCase):
+    """SXFT-16: the lab manager stores the lab's name, address and hours; every page shows them."""
+
+    def setUp(self):
+        self.url = reverse("lab_info")
+
+    def login_as(self, role):
+        user = User.objects.create_user(username=role, role=role, must_change_password=False)
+        self.client.force_login(user)
+        return user
+
+    def post_info(self, **overrides):
+        data =        data = {"name": "Desert Clinical Lab", "address": "123 Main St, Tucson, AZ",  "phone": "520-555-0101", "hours": "Mon-Fri 7am-5pm"}
+        data.update(overrides)
+        return self.client.post(self.url, data)
+
+    def test_manager_saves_lab_info(self):
+        self.login_as(User.Role.LAB_MANAGER)
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+        self.assertRedirects(self.post_info(), self.url)
+        self.assertEqual(LabInfo.load().name, "Desert Clinical Lab")
+        self.assertTrue(ActivityLog.objects.filter(action="lab_info_updated").exists())
+
+    def test_saving_again_edits_the_same_row(self):
+        self.login_as(User.Role.LAB_MANAGER)
+        self.post_info()
+        self.post_info(name="New Name")
+        self.assertEqual(LabInfo.objects.count(), 1)
+        self.assertEqual(LabInfo.load().name, "New Name")
+
+    def test_all_fields_are_required(self):
+        self.login_as(User.Role.LAB_MANAGER)
+        response = self.post_info(name="", address="", phone="", hours="")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(LabInfo.objects.exists())
+
+    def test_other_roles_are_forbidden(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.assertEqual(self.post_info().status_code, 403)
+        self.assertFalse(LabInfo.objects.exists())
+
+    def test_footer_shows_lab_info(self):
+        LabInfo.objects.create(name="Desert Clinical Lab", address="123 Main St", phone="520-555-0101", hours="Mon-Fri 7am-5pm")
+        response = self.client.get(reverse("login"))
+        self.assertContains(response, "Desert Clinical Lab")
+        self.assertContains(response, "520-555-0101")
+        self.assertContains(response, "Mon-Fri 7am-5pm")
+
+    def test_no_footer_before_lab_info_is_saved(self):
+        self.assertNotContains(self.client.get(reverse("login")), "<footer")
+    
+    def test_bad_phone_is_rejected(self):
+        self.login_as(User.Role.LAB_MANAGER)
+        response = self.post_info(phone="not a phone")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(LabInfo.objects.exists())
+
+    def test_lab_info_is_in_the_admin(self):
+        from django.contrib import admin
+        self.assertIn(LabInfo, admin.site._registry)
