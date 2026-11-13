@@ -166,6 +166,15 @@ class LockoutTests(TestCase):
         self.assertEqual(locked.count(), 1)
         self.assertIn("tech1", locked.get().details)
 
+    def test_unknown_username_locks_without_email_or_log(self):
+        User.objects.create_user(username="m1", email="m1@lab.test", role=User.Role.LAB_MANAGER)
+        for _ in range(5):
+            response = self.login(username="ghost\nBcc: x@y.test", password="wrong")
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertFalse(ActivityLog.objects.filter(action="account_locked").exists())
+
     def test_lock_is_per_username(self):
         User.objects.create_user(
             username="tech2", password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
@@ -388,6 +397,13 @@ class NotifyLabManagersTests(TestCase):
 
     def make_user(self, username, role=User.Role.LAB_MANAGER, **fields):
         return User.objects.create_user(username=username, role=role, **fields)
+
+    def test_shared_address_gets_one_copy(self):
+        self.make_user("m1", email="lab@lab.test")
+        self.make_user("m2", email="lab@lab.test")
+
+        self.assertEqual(notify_lab_managers("Locked out", "body"), 1)
+        self.assertEqual(mail.outbox[0].to, ["lab@lab.test"])
 
     def test_sends_one_email_to_every_active_manager_with_an_address(self):
         self.make_user("m1", email="m1@lab.test")

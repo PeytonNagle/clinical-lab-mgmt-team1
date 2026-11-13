@@ -33,6 +33,7 @@ def notify_lab_managers(subject, body):
         User.objects.filter(role=User.Role.LAB_MANAGER, is_active=True)
         .exclude(email="")
         .values_list("email", flat=True)
+        .distinct()
     )
     if not recipients:
         return 0
