@@ -1463,6 +1463,9 @@ class SupplyCheckPageTests(TestCase):
         self.assertRedirects(self.client.post(self.url), self.url)
         log = ActivityLog.objects.get(action="test_blocked")
         self.assertEqual(log.patient, self.sample.order.patient)
+        self.assertIn(self.sample.barcode, log.details)
+        self.assertIn("BMP", log.details)
+    
 
     def test_no_stock_blocks(self):
         self.client.force_login(self.collector)
