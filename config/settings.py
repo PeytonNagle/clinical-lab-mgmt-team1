@@ -153,3 +153,16 @@ AXES_RESET_ON_SUCCESS = True
 AXES_LOCKOUT_TEMPLATE = "registration/locked_out.html"
 # Lock the account, not the IP: lab staff share workstations, and the spec locks a user.
 SILENCED_SYSTEM_CHECKS = ["axes.W006"]
+
+# Email
+# With EMAIL_HOST set (e.g. a Mailtrap sandbox) mail goes over SMTP; otherwise it prints to the console.
+if env("EMAIL_HOST", default=""):
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = env("EMAIL_HOST")
+    EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+    EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+    EMAIL_USE_TLS = True
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="CLMS <no-reply@clms.local>")

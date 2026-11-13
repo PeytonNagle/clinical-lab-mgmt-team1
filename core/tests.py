@@ -1,8 +1,11 @@
+import smtplib
 from datetime import timedelta
 from io import StringIO
+from unittest.mock import patch
 
 from axes.models import AccessAttempt
 from django.contrib.auth.models import AnonymousUser
+from django.core import mail
 from django.core.management import CommandError, call_command
 from django.template import RequestContext, Template
 from django.test import RequestFactory, TestCase
@@ -12,7 +15,7 @@ from django.utils import timezone
 from lab.models import Patient
 
 from .models import ActivityLog, User, LabInfo
-from .utils import log_event
+from .utils import log_event, notify_lab_managers
 
 
 class UserModelTests(TestCase):
@@ -366,3 +369,64 @@ class LabInfoTests(TestCase):
     def test_lab_info_is_in_the_admin(self):
         from django.contrib import admin
         self.assertIn(LabInfo, admin.site._registry)
+
+
+class NotifyLabManagersTests(TestCase):
+    """SXFT-15: one email to every active lab manager that has an address."""
+
+    def make_user(self, username, role=User.Role.LAB_MANAGER, **fields):
+        return User.objects.create_user(username=username, role=role, **fields)
+
+    def test_sends_one_email_to_every_active_manager_with_an_address(self):
+        self.make_user("m1", email="m1@lab.test")
+        self.make_user("m2", email="m2@lab.test")
+
+        sent = notify_lab_managers("Locked out", "tech1 is locked out")
+
+        self.assertEqual(sent, 2)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(sorted(mail.outbox[0].to), ["m1@lab.test", "m2@lab.test"])
+        self.assertEqual(mail.outbox[0].subject, "Locked out")
+        self.assertEqual(mail.outbox[0].body, "tech1 is locked out")
+
+    def test_skips_inactive_blank_email_and_other_roles(self):
+        self.make_user("ok", email="ok@lab.test")
+        self.make_user("inactive", email="inactive@lab.test", is_active=False)
+        self.make_user("blank", email="")
+        self.make_user("tech", role=User.Role.TECHNICIAN, email="tech@lab.test")
+
+        sent = notify_lab_managers("s", "b")
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(mail.outbox[0].to, ["ok@lab.test"])
+
+    def test_no_recipients_sends_nothing(self):
+        self.make_user("blank", email="")
+
+        self.assertEqual(notify_lab_managers("s", "b"), 0)
+        self.assertEqual(mail.outbox, [])
+        self.assertFalse(ActivityLog.objects.exists())
+
+    def test_send_failure_is_logged_not_raised(self):
+        self.make_user("m1", email="m1@lab.test")
+
+        for error in (smtplib.SMTPException("relay down"), OSError("connection refused")):
+            with self.subTest(error=error):
+                ActivityLog.objects.all().delete()
+                with patch("core.utils.send_mail", side_effect=error):
+                    with self.assertLogs("core.utils", level="ERROR"):
+                        sent = notify_lab_managers("Locked out", "body")
+
+                self.assertEqual(sent, 0)
+                entry = ActivityLog.objects.get()
+                self.assertEqual(entry.action, "email_failed")
+                self.assertIsNone(entry.user)
+                self.assertIn("Locked out", entry.details)
+                self.assertIn(str(error), entry.details)
+
+    def test_other_errors_are_not_swallowed(self):
+        self.make_user("m1", email="m1@lab.test")
+
+        with patch("core.utils.send_mail", side_effect=ValueError("bug")):
+            with self.assertRaises(ValueError):
+                notify_lab_managers("s", "b")
