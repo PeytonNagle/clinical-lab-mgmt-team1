@@ -18,6 +18,9 @@ from .importer import import_results
 from .models import PANEL_MODELS, Patient, Sample, TestOrder
 from .phone import phone_digits
 
+from django.core.exceptions import PermissionDenied
+from inventory.stock import check_supplies
+
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
 # Cashiers are added by change request for backlog item 5.
 CAN_REMOVE_PATIENTS = (
@@ -330,3 +333,27 @@ def collect_sample(request, order_id):
         return redirect("collector_dashboard")
     messages.success(request, f"Sample {sample.barcode} collected for {order.patient}. Print its label now.")
     return redirect("sample_label", pk=sample.pk)
+
+@role_required(User.Role.SPECIMEN_COLLECTOR, User.Role.LAB_MANAGER)
+def supply_check(request, pk):
+    sample = get_sample(pk)
+    order = sample.order
+    if not sample.is_collected:
+        messages.error(request, f"The sample for order #{order.pk} hasn't been collected yet.")
+        return redirect("collector_dashboard")
+    problems = check_supplies([test.code for test in order.tests.all()])
+    can_run = request.user.role == User.Role.SPECIMEN_COLLECTOR
+
+    if request.method == "POST":
+        if not can_run:
+            raise PermissionDenied
+        if problems:
+            reasons = "; ".join(message for _, message in problems)
+            log_event(request.user, "test_blocked", patient=order.patient, details=f"order {order.pk}: {reasons}")
+            messages.warning(request, f"Order #{order.pk} is blocked. {reasons}")
+            return redirect("supply_check", pk=pk)
+        messages.success(request, f"Supplies are ready for order #{order.pk}. Send the sample to the lab.")
+        return redirect("collector_dashboard")
+
+    return render(request, "lab/supply_check.html",
+                  {"sample": sample, "order": order, "problems": problems, "can_run": can_run})
