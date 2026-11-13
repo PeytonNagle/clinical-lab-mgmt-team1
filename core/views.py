@@ -9,7 +9,7 @@ from django.http import Http404
 from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.contrib.auth.decorators import login_required
-from django.db.models import Max
+from django.db.models import Max, Sum
 from django.views.decorators.http import require_POST
 
 from .decorators import role_required
@@ -96,25 +96,33 @@ def lab_info(request):
     return render(request, "core/lab_info_form.html", {"form": form})
 
 
+def locked_users():
+    """Real usernames locked after too many failed logins, most recent attempt first."""
+    # Axes keeps one row per username, browser and IP, and locks on their total.
+    return (
+        AccessAttempt.objects.filter(username__in=User.objects.values("username"))
+        .values("username")
+        .annotate(failures=Sum("failures_since_start"), last_attempt=Max("attempt_time"))
+        .filter(failures__gte=settings.AXES_FAILURE_LIMIT)
+        .order_by("-last_attempt")
+    )
+
+
 @role_required(User.Role.LAB_MANAGER)
 def locked_accounts(request):
-    """SXFT-15: usernames locked after too many failed logins, newest first."""
-    locked = (
-        AccessAttempt.objects.filter(failures_since_start__gte=settings.AXES_FAILURE_LIMIT)
-        .values("username")
-        .annotate(locked_at=Max("attempt_time"))
-        .order_by("-locked_at")
-    )
-    return render(request, "core/locked_accounts.html", {"locked": locked})
+    """SXFT-15: the lab manager sees locked accounts and unlocks them."""
+    return render(request, "core/locked_accounts.html", {"locked": locked_users()})
 
 
 @role_required(User.Role.LAB_MANAGER)
 @require_POST
 def unlock_account(request):
     username = request.POST.get("username", "")
-    if reset(username=username):
-        log_event(request.user, "account_unlocked", details=f"{username} unlocked")
-        messages.success(request, f"{username} is unlocked and can sign in again.")
-    else:
-        messages.warning(request, f"{username} was not locked.")
+    # Checked first: reset() with a blank username would clear every lock.
+    if not locked_users().filter(username=username).exists():
+        messages.warning(request, f"{username or 'That account'} is not locked.")
+        return redirect("locked_accounts")
+    reset(username=username)
+    log_event(request.user, "account_unlocked", details=f"{username} unlocked")
+    messages.success(request, f"{username} is unlocked and can sign in again.")
     return redirect("locked_accounts")

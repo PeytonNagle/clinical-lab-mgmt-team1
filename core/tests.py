@@ -508,6 +508,29 @@ class UnlockPageTests(TestCase):
         self.assertEqual(entry.user, self.manager)
         self.assertIn("tech1", entry.details)
 
+    def test_lists_account_locked_from_two_browsers(self):
+        for agent, times in (("browser-a", 3), ("browser-b", 2)):
+            for _ in range(times):
+                self.client.post("/accounts/login/", {"username": "tech1", "password": "wrong"}, HTTP_USER_AGENT=agent)
+        self.client.force_login(self.manager)
+
+        self.assertContains(self.client.get(reverse("locked_accounts")), "tech1")
+
+    def test_blank_username_unlocks_nothing(self):
+        self.lock("tech1")
+        self.client.force_login(self.manager)
+        self.client.post(reverse("unlock_account"), {"username": ""})
+
+        self.assertContains(self.client.get(reverse("locked_accounts")), "tech1")
+        self.assertFalse(ActivityLog.objects.filter(action="account_unlocked").exists())
+
+    def test_unlocking_an_account_that_is_not_locked_logs_nothing(self):
+        self.attempt("tech2")
+        self.client.force_login(self.manager)
+        self.client.post(reverse("unlock_account"), {"username": "tech2"})
+
+        self.assertFalse(ActivityLog.objects.filter(action="account_unlocked").exists())
+
     def test_other_roles_get_403(self):
         self.lock("tech2")
         self.client.force_login(User.objects.get(username="tech1"))
