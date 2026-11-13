@@ -154,6 +154,18 @@ class LockoutTests(TestCase):
         AccessAttempt.objects.update(attempt_time=timezone.now() - timedelta(days=30))
         self.assertEqual(self.login().status_code, 429)
 
+    def test_lockout_emails_managers_and_logs_once(self):
+        User.objects.create_user(username="m1", email="m1@lab.test", role=User.Role.LAB_MANAGER)
+        self.fail(5)
+        self.login()  # still locked: must not email again
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["m1@lab.test"])
+        self.assertIn("tech1", mail.outbox[0].subject)
+        locked = ActivityLog.objects.filter(action="account_locked")
+        self.assertEqual(locked.count(), 1)
+        self.assertIn("tech1", locked.get().details)
+
     def test_lock_is_per_username(self):
         User.objects.create_user(
             username="tech2", password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False

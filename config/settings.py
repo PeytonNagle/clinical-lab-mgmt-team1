@@ -150,6 +150,8 @@ AXES_FAILURE_LIMIT = 5
 AXES_LOCKOUT_PARAMETERS = ["username"]
 AXES_COOLOFF_TIME = None
 AXES_RESET_ON_SUCCESS = True
+# Keep counting tries while locked; core.signals emails only when the count first hits the limit.
+AXES_RESET_COOL_OFF_ON_FAILURE_DURING_LOCKOUT = True
 AXES_LOCKOUT_TEMPLATE = "registration/locked_out.html"
 # Lock the account, not the IP: lab staff share workstations, and the spec locks a user.
 SILENCED_SYSTEM_CHECKS = ["axes.W006"]
