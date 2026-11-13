@@ -49,7 +49,10 @@ def check_supplies(test_codes):
         if good >= amount:
             continue
         if item.lots.filter(quantity__gt=0, expiry_date__lt=today).exists():
-            problems.append((item, f"{item} is expired: only {good} of {amount} {item.unit} usable"))
+            message = f"{item} is expired: only {good} of {amount} {item.unit} usable"
+        elif good == 0:
+            message = f"{item} is out of stock: need {amount} {item.unit}"
         else:
-            problems.append((item, f"{item} is low: {good} of {amount} {item.unit} in stock"))
+            message = f"{item} is low: {good} of {amount} {item.unit} in stock"
+        problems.append((item, message))
     return problems

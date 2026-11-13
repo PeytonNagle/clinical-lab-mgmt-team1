@@ -83,7 +83,7 @@
                                     {# Only the collector prints the first label (B3); the manager can just look. #}
                                     <a href="{% url 'sample_label' sample.pk %}" class="btn btn-sm btn-outline-primary">{% if can_collect %}Print label{% else %}View label{% endif %}</a>
                                 {% endif %}
-                                <a href="{% url 'supply_check' sample.pk %}" class="btn btn-sm btn-outline-secondary ms-1">Check supplies</a>
+                                <a href="{% url 'supply_check' sample.pk %}" class="btn btn-sm btn-outline-secondary ms-1">Run test</a>
                             </td>
                         </tr>
                     {% empty %}
