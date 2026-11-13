@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Locked accounts | CLMS{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <h1 class="h4 mb-3">Locked accounts</h1>
+        <p class="text-muted">Accounts lock after 5 failed sign-ins in a row and stay locked until you unlock them.</p>
+
+        {% if locked %}
+            <table class="table align-middle">
+                <thead>
+                    <tr><th>Username</th><th>Last attempt</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for row in locked %}
+                        <tr>
+                            <td>{{ row.username }}</td>
+                            <td>{{ row.locked_at }}</td>
+                            <td class="text-end">
+                                <form method="post" action="{% url 'unlock_account' %}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="username" value="{{ row.username }}">
+                                    <button type="submit" class="btn btn-sm btn-primary">Unlock</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No accounts are locked.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

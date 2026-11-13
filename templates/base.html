@@ -25,6 +25,7 @@
                     {% if user.role == "lab_manager" %}
                         <a class="nav-link text-white me-2" href="{% url 'item_list' %}">Inventory</a>
                         <a class="nav-link text-white me-2" href="{% url 'lab_info' %}">Lab info</a>
+                        <a class="nav-link text-white me-2" href="{% url 'locked_accounts' %}">Locked accounts</a>
                     {% endif %}
                     <span class="navbar-text me-2">
                         {{ user.get_full_name|default:user.username }} &middot; {{ user.get_role_display }}

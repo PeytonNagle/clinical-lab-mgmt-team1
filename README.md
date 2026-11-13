@@ -39,9 +39,9 @@ Only lab managers can create accounts, so whoever installs the system creates th
 ### Account lockout
 
 Five wrong passwords in a row lock that username (django-axes). A correct password before the fifth resets the count.
-The lock never expires on its own. The username is locked, not the computer, so others can still sign in from the same machine.
+The lock never expires on its own. A lab manager unlocks it on **Locked accounts** (`/accounts/locked/`, in the navbar). The username is locked, not the computer, so others can still sign in from the same machine.
 
-To unlock an account, run this on the server:
+If the only lab manager is locked out, unlock them from the server:
 
 ```sh
 python manage.py axes_reset_username <username>
@@ -116,6 +116,7 @@ Every page requires login except the login page.
 | `/orders/new/`     | Place a test order, with insurance filled in from the patient (any staff role) |
 | `/orders/<id>/`    | Order detail: patient, physician, insurance and tests                |
 | `/staff/register/` | Create a staff account (lab manager only)                            |
+| `/accounts/locked/` | Locked accounts, with an Unlock button for each (lab manager only). Also linked in the navbar |
 | `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
 | `/inventory/`      | Supply list with stock left and next expiry (lab manager). Also linked in the navbar |
 | `/inventory/new/`  | Add a supply item (lab manager)                                      |

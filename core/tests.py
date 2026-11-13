@@ -466,3 +466,52 @@ class NotifyLabManagersTests(TestCase):
         with patch("core.utils.send_mail", side_effect=ValueError("bug")):
             with self.assertRaises(ValueError):
                 notify_lab_managers("s", "b")
+
+
+class UnlockPageTests(TestCase):
+    """SXFT-15: the lab manager lists locked accounts and unlocks them."""
+
+    def setUp(self):
+        for name in ("tech1", "tech2"):
+            User.objects.create_user(
+                username=name, password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
+            )
+        self.manager = User.objects.create_user(
+            username="m1", role=User.Role.LAB_MANAGER, must_change_password=False
+        )
+
+    def attempt(self, username, password="wrong"):
+        return self.client.post("/accounts/login/", {"username": username, "password": password})
+
+    def lock(self, username):
+        for _ in range(5):
+            self.attempt(username)
+
+    def test_lists_only_locked_accounts(self):
+        self.lock("tech1")
+        self.attempt("tech2")  # one failure is not a lock
+        self.client.force_login(self.manager)
+
+        response = self.client.get(reverse("locked_accounts"))
+        self.assertContains(response, "tech1")
+        self.assertNotContains(response, "tech2")
+
+    def test_unlock_lets_the_user_sign_in_and_is_logged(self):
+        self.lock("tech1")
+        self.client.force_login(self.manager)
+        self.client.post(reverse("unlock_account"), {"username": "tech1"})
+        self.client.logout()
+
+        response = self.attempt("tech1", password="s3cret-pass")
+        self.assertEqual(response.status_code, 302)
+        entry = ActivityLog.objects.get(action="account_unlocked")
+        self.assertEqual(entry.user, self.manager)
+        self.assertIn("tech1", entry.details)
+
+    def test_other_roles_get_403(self):
+        self.lock("tech2")
+        self.client.force_login(User.objects.get(username="tech1"))
+        self.assertEqual(self.client.get(reverse("locked_accounts")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("unlock_account"), {"username": "tech2"}).status_code, 403)
+        self.client.logout()
+        self.assertEqual(self.attempt("tech2", password="s3cret-pass").status_code, 429)
