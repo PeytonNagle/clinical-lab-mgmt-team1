@@ -167,6 +167,6 @@ if env("EMAIL_HOST", default=""):
     EMAIL_USE_TLS = True
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-# Seconds; a stuck mail server must not hang the login page that triggered the email
+# Seconds per mail-server step, so a stuck server can't hang the login that triggered the email forever
 EMAIL_TIMEOUT = 10
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="CLMS <no-reply@clms.local>")

@@ -1,5 +1,5 @@
+from axes.helpers import get_failure_limit
 from axes.signals import user_locked_out
-from django.conf import settings
 from django.dispatch import receiver
 
 from .models import User
@@ -9,14 +9,15 @@ from .utils import log_event, notify_lab_managers
 @receiver(user_locked_out)
 def report_lockout(sender, request, username, **kwargs):
     # Axes fires this on every attempt while locked; only report the one that caused the lock.
-    if getattr(request, "axes_failures_since_start", None) != settings.AXES_FAILURE_LIMIT:
+    limit = get_failure_limit(request, request.axes_credentials)
+    if getattr(request, "axes_failures_since_start", None) != limit:
         return
     # Guessed usernames lock too, but only real accounts are worth a manager's inbox.
     if not User.objects.filter(username=username).exists():
         return
-    log_event(None, "account_locked", details=f"{username} locked after {settings.AXES_FAILURE_LIMIT} failed logins")
+    log_event(None, "account_locked", details=f"{username} locked after {limit} failed logins")
     notify_lab_managers(
         f"CLMS account locked: {username}",
-        f"The account {username} was locked after {settings.AXES_FAILURE_LIMIT} failed sign-in attempts in a row.\n"
+        f"The account {username} was locked after {limit} failed sign-in attempts in a row.\n"
         "A lab manager must unlock it before it can sign in again.",
     )

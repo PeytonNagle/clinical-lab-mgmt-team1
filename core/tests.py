@@ -166,6 +166,14 @@ class LockoutTests(TestCase):
         self.assertEqual(locked.count(), 1)
         self.assertIn("tech1", locked.get().details)
 
+    def test_plain_unknown_username_sends_no_email(self):
+        User.objects.create_user(username="m1", email="m1@lab.test", role=User.Role.LAB_MANAGER)
+        for _ in range(5):
+            self.login(username="ghost", password="wrong")
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertFalse(ActivityLog.objects.filter(action="account_locked").exists())
+
     def test_unknown_username_locks_without_email_or_log(self):
         User.objects.create_user(username="m1", email="m1@lab.test", role=User.Role.LAB_MANAGER)
         for _ in range(5):
