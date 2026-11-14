@@ -51,9 +51,11 @@ When an account locks, every active lab manager with an email address gets one e
 
 ### Email
 
-With no email settings, emails print in the `runserver` terminal. To catch them in an inbox instead, use a free [Mailtrap](https://mailtrap.io) sandbox. It never delivers to real addresses.
+With no email settings, emails print in the `runserver` terminal. No account is needed.
 
-1. In Mailtrap, open **Sandboxes**, pick your sandbox, and copy the SMTP username and password.
+To see them in an inbox, each person makes their own free [Mailtrap](https://mailtrap.io) sandbox (don't share credentials). It never delivers to real addresses.
+
+1. In Mailtrap, open your sandbox's SMTP credentials and copy the username and password.
 2. Add them to `.env` (see `.env.example`):
 
    ```sh
@@ -63,7 +65,10 @@ With no email settings, emails print in the `runserver` terminal. To catch them 
    EMAIL_HOST_PASSWORD=<password>
    ```
 
-3. Restart `runserver`. Lockout emails now show up in the Mailtrap sandbox.
+3. Check it: `python manage.py sendtestemail manager1@example.com` should land in your sandbox. Seeded managers have no email, so set one in `/admin/` to receive lockout emails.
+4. Restart `runserver`. Lockout emails now show up in your sandbox.
+
+`CERTIFICATE_VERIFY_FAILED`? Python from python.org needs its certificates installed once: `open "/Applications/Python 3.13/Install Certificates.command"`.
 
 Sending real email later only means pointing these settings at a real mail server. If sending fails, sign-in still works and the failure goes in the activity log.
 
