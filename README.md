@@ -79,6 +79,9 @@ Every page requires login except the login page.
 | `/orders/`         | Order list, newest first, 25 per page; any staff role. Also linked in the navbar |
 | `/orders/new/`     | Place a test order, with insurance filled in from the patient (any staff role) |
 | `/orders/<id>/`    | Order detail: patient, physician, insurance and tests                |
+| `/lab/collect/` | Collect samples (collector, lab manager). Also in the navbar |
+| `/samples/<id>/label/` | Tube label with barcode (collector prints once; lab manager reprints) |
+| `/lab/collect/samples/<id>/supplies/` | Run test supply check (collector runs, lab manager views) |
 | `/staff/register/` | Create a staff account (lab manager only)                            |
 | `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
 | `/inventory/`      | Supply list with stock left and next expiry (lab manager). Also linked in the navbar |
@@ -87,6 +90,19 @@ Every page requires login except the login page.
 | `/inventory/<id>/receive/` | Receive a delivery: lot number, quantity and expiry (lab manager) |
 | `/inventory/lots/<id>/edit/` | Correct a lot after a stock count (lab manager)            |
 | `/admin/`          | Django admin. Opens for users with `is_staff`; editing needs a superuser |
+
+## Barcodes and labels
+
+- A collector can print a sample's label once. Later visits show "already printed".
+- Only the lab manager can reprint, and must give a reason.
+- Prints and reprints (with reason) are in the activity log.
+
+## Inventory and supply checks
+
+- `seed` adds fake lots. The hematology reagent pack has no stock, so **Run test** on a CBC sample reports it out of stock. One BMP cartridge lot is expired.
+- Result uploads take stock soonest-expiring first. If stock is short, the result is still saved and a warning shows on the upload page only (not logged).
+- **Run test** only warns; it doesn't block anything later. The block is logged only when the collector clicks **Run test** on the check page.
+- A superuser sets test supplies in `/admin/` under **Test supplies**.
 
 ## Rules
 
