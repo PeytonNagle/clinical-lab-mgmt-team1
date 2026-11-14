@@ -79,9 +79,9 @@ Every page requires login except the login page.
 | `/orders/`         | Order list, newest first, 25 per page; any staff role. Also linked in the navbar |
 | `/orders/new/`     | Place a test order, with insurance filled in from the patient (any staff role) |
 | `/orders/<id>/`    | Order detail: patient, physician, insurance and tests                |
-| `/lab/collect/`    | Collect samples: orders waiting, and today's collections (specimen collector, lab manager). Also linked in the navbar |
-| `/samples/<id>/label/` | Tube label with barcode. Collector prints it once; lab manager can view and reprint |
-| `/lab/collect/samples/<id>/supplies/` | Run test: checks supplies for a collected sample (collector runs it, lab manager views) |
+| `/lab/collect/` | Collect samples (collector, lab manager). Also in the navbar |
+| `/samples/<id>/label/` | Tube label with barcode (collector prints once; lab manager reprints) |
+| `/lab/collect/samples/<id>/supplies/` | Run test supply check (collector runs, lab manager views) |
 | `/staff/register/` | Create a staff account (lab manager only)                            |
 | `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
 | `/inventory/`      | Supply list with stock left and next expiry (lab manager). Also linked in the navbar |
@@ -93,39 +93,16 @@ Every page requires login except the login page.
 
 ## Barcodes and labels
 
-Each sample's barcode is its order's ID, so machine result files that use the order ID match it.
-`lab/barcodes.py` draws it as a Code 128 barcode with the `python-barcode` package. It is already in `requirements.txt`, so `pip install -r requirements.txt` is all you need. There are no image files and no printer setup.
-
-**Print a label:**
-
-1. Log in as `collector1`, open **Collect samples** and collect an order's sample.
-2. On the label page, click **Print label**. The browser's print dialog opens and only the label prints.
-
-**Print once:**
-
-- A collector can print a label one time. Right after printing the label still shows so the print dialog works; on any later visit the page shows "already printed" with who printed it and when, and hides the label.
-- Only the collector can make the first print. The lab manager can always see the label. To print it again, the manager gives a reason (for example "label smudged") and clicks **Reprint**. Collectors can't reprint.
-- Prints and reprints (with the reason) go in the activity log. A reprint doesn't change the first print's time or user.
+- A collector can print a sample's label once. Later visits show "already printed".
+- Only the lab manager can reprint, and must give a reason.
+- Prints and reprints (with reason) are in the activity log.
 
 ## Inventory and supply checks
 
-| Term        | Meaning                                                                      |
-| ----------- | ---------------------------------------------------------------------------- |
-| Supply item | Something the lab keeps in stock, like a tube type or reagent, with a unit   |
-| Lot         | One delivery of an item: lot number, how many are left, and an expiry date   |
-| Test supply | How many units of an item one run of a test uses, e.g. a BMP uses 1 gold top tube |
-
-Stock for an item is the sum of its lots that have some left and are not past their expiry date. Removed (inactive) supply items are left out of stock use and supply checks.
-
-**Starting data.** `migrate` adds six supply items and what BMP, CBC and LIPID use (no stock). `seed` then adds fake lots, only if there are no lots yet: gold top tubes (one lot expires in 10 days), lavender top tubes, BMP and lipid cartridges, and pipette tips. One BMP cartridge lot is already expired. The hematology reagent pack has no lots, so it shows 0 on `/inventory/` and **Run test** on a CBC sample reports it out of stock.
-
-**Result uploads.** For each panel it saves, `/results/upload/` takes that test's supplies from stock, soonest-expiring lot first. Expired and empty lots are skipped. A lot never goes below zero.
-
-**When supplies run out.** The result is still saved, because the machine has already run the test. The upload page lists a **Stock warning** such as `Order 12, BMP: Pipette tips ran out, 2 tips short`. The warning is shown only on that page and is not in the activity log, so tell the lab manager right away.
-
-**Run test (before the machine).** In the **Collected today** table on **Collect samples**, **Run test** opens a supply check for that sample (for older samples, go to `/lab/collect/samples/<id>/supplies/`). It lists anything out of stock, expired or low. When the collector clicks **Run test** on that page and something is short, the block goes in the activity log with the order, sample and tests. The check is a warning only: nothing later stops the sample from being sent or its results from being uploaded.
-
-**Set which supplies a test uses.** There is no page for this. As a superuser (see the `manager1` step under Test logins), in `/admin/`, open **Test supplies** and add or change a row (test, item, quantity per run). An item can be added once per test. Supply items and lots are managed on the `/inventory/` pages.
+- `seed` adds fake lots. The hematology reagent pack has no stock, so **Run test** on a CBC sample reports it out of stock. One BMP cartridge lot is expired.
+- Result uploads take stock soonest-expiring first. If stock is short, the result is still saved and a warning shows on the upload page only (not logged).
+- **Run test** only warns; it doesn't block anything later. The block is logged only when the collector clicks **Run test** on the check page.
+- A superuser sets test supplies in `/admin/` under **Test supplies**.
 
 ## Rules
 
