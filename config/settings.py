@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'lab',
     'inventory',
     'billing',
+    'axes',
 ]
 
 MIDDLEWARE = [
@@ -56,6 +57,8 @@ MIDDLEWARE = [
     'core.middleware.ForcePasswordChangeMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # Last, so it can turn a locked-out login into the lockout page
+    'axes.middleware.AxesMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -92,6 +95,11 @@ DATABASES = {
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
+
+AUTHENTICATION_BACKENDS = [
+    "axes.backends.AxesStandaloneBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -135,3 +143,30 @@ AUTH_USER_MODEL = "core.User"
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
+
+# Account lockout (django-axes). Spec: lock after 5 failed logins in a row,
+# and only a lab manager can unlock, so the lock never expires on its own.
+AXES_FAILURE_LIMIT = 5
+AXES_LOCKOUT_PARAMETERS = ["username"]
+AXES_COOLOFF_TIME = None
+AXES_RESET_ON_SUCCESS = True
+# Keep counting tries while locked; core.signals emails only when the count first hits the limit.
+AXES_RESET_COOL_OFF_ON_FAILURE_DURING_LOCKOUT = True
+AXES_LOCKOUT_TEMPLATE = "registration/locked_out.html"
+# Lock the account, not the IP: lab staff share workstations, and the spec locks a user.
+SILENCED_SYSTEM_CHECKS = ["axes.W006"]
+
+# Email
+# With EMAIL_HOST set (e.g. a Mailtrap sandbox) mail goes over SMTP; otherwise it prints to the console.
+if env("EMAIL_HOST", default=""):
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = env("EMAIL_HOST")
+    EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+    EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+    EMAIL_USE_TLS = True
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+# Seconds per mail-server step, so a stuck server can't hang the login that triggered the email forever
+EMAIL_TIMEOUT = 10
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="CLMS <no-reply@clms.local>")

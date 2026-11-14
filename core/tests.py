@@ -1,7 +1,11 @@
+import smtplib
 from datetime import timedelta
 from io import StringIO
+from unittest.mock import patch
 
+from axes.models import AccessAttempt
 from django.contrib.auth.models import AnonymousUser
+from django.core import mail
 from django.core.management import CommandError, call_command
 from django.template import RequestContext, Template
 from django.test import RequestFactory, TestCase
@@ -11,7 +15,7 @@ from django.utils import timezone
 from lab.models import Patient
 
 from .models import ActivityLog, User, LabInfo
-from .utils import log_event
+from .utils import log_event, notify_lab_managers
 
 
 class UserModelTests(TestCase):
@@ -108,6 +112,83 @@ class StaffLoginTests(TestCase):
         response = self.login("pat1")
         self.assertFalse(response.context["user"].is_authenticated)
         self.assertContains(response, "Patient accounts can&#x27;t sign in here.")
+
+
+class LockoutTests(TestCase):
+    def setUp(self):
+        User.objects.create_user(
+            username="tech1", password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
+        )
+
+    def login(self, password="s3cret-pass", username="tech1"):
+        return self.client.post("/accounts/login/", {"username": username, "password": password})
+
+    def fail(self, times):
+        for _ in range(times):
+            self.login(password="wrong")
+
+    def assert_logged_in(self, response):
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("_auth_user_id", self.client.session)
+
+    def test_four_failures_still_allow_login(self):
+        self.fail(4)
+        self.assert_logged_in(self.login())
+
+    def test_fifth_failure_locks_the_account(self):
+        self.fail(5)
+        response = self.login()
+        self.assertEqual(response.status_code, 429)
+        self.assertContains(response, "locked", status_code=429)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_success_resets_the_count(self):
+        self.fail(4)
+        self.assert_logged_in(self.login())
+        self.client.logout()
+        self.fail(4)
+        self.assert_logged_in(self.login())
+
+    def test_lock_does_not_expire(self):
+        self.fail(5)
+        AccessAttempt.objects.update(attempt_time=timezone.now() - timedelta(days=30))
+        self.assertEqual(self.login().status_code, 429)
+
+    def test_lockout_emails_managers_and_logs_once(self):
+        User.objects.create_user(username="m1", email="m1@lab.test", role=User.Role.LAB_MANAGER)
+        self.fail(5)
+        self.login()  # still locked: must not email again
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["m1@lab.test"])
+        self.assertIn("tech1", mail.outbox[0].subject)
+        locked = ActivityLog.objects.filter(action="account_locked")
+        self.assertEqual(locked.count(), 1)
+        self.assertIn("tech1", locked.get().details)
+
+    def test_plain_unknown_username_sends_no_email(self):
+        User.objects.create_user(username="m1", email="m1@lab.test", role=User.Role.LAB_MANAGER)
+        for _ in range(5):
+            self.login(username="ghost", password="wrong")
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertFalse(ActivityLog.objects.filter(action="account_locked").exists())
+
+    def test_unknown_username_locks_without_email_or_log(self):
+        User.objects.create_user(username="m1", email="m1@lab.test", role=User.Role.LAB_MANAGER)
+        for _ in range(5):
+            response = self.login(username="ghost\nBcc: x@y.test", password="wrong")
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertFalse(ActivityLog.objects.filter(action="account_locked").exists())
+
+    def test_lock_is_per_username(self):
+        User.objects.create_user(
+            username="tech2", password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
+        )
+        self.fail(5)
+        self.assert_logged_in(self.login(username="tech2"))
 
 
 class PasswordTests(TestCase):
@@ -317,3 +398,155 @@ class LabInfoTests(TestCase):
     def test_lab_info_is_in_the_admin(self):
         from django.contrib import admin
         self.assertIn(LabInfo, admin.site._registry)
+
+
+class NotifyLabManagersTests(TestCase):
+    """SXFT-15: one email to every active lab manager that has an address."""
+
+    def make_user(self, username, role=User.Role.LAB_MANAGER, **fields):
+        return User.objects.create_user(username=username, role=role, **fields)
+
+    def test_shared_address_gets_one_copy(self):
+        self.make_user("m1", email="lab@lab.test")
+        self.make_user("m2", email="lab@lab.test")
+
+        self.assertEqual(notify_lab_managers("Locked out", "body"), 1)
+        self.assertEqual(mail.outbox[0].to, ["lab@lab.test"])
+
+    def test_sends_one_email_to_every_active_manager_with_an_address(self):
+        self.make_user("m1", email="m1@lab.test")
+        self.make_user("m2", email="m2@lab.test")
+
+        sent = notify_lab_managers("Locked out", "tech1 is locked out")
+
+        self.assertEqual(sent, 2)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(sorted(mail.outbox[0].to), ["m1@lab.test", "m2@lab.test"])
+        self.assertEqual(mail.outbox[0].subject, "Locked out")
+        self.assertEqual(mail.outbox[0].body, "tech1 is locked out")
+
+    def test_skips_inactive_blank_email_and_other_roles(self):
+        self.make_user("ok", email="ok@lab.test")
+        self.make_user("inactive", email="inactive@lab.test", is_active=False)
+        self.make_user("blank", email="")
+        self.make_user("tech", role=User.Role.TECHNICIAN, email="tech@lab.test")
+
+        sent = notify_lab_managers("s", "b")
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(mail.outbox[0].to, ["ok@lab.test"])
+
+    def test_no_recipients_sends_nothing(self):
+        self.make_user("blank", email="")
+
+        self.assertEqual(notify_lab_managers("s", "b"), 0)
+        self.assertEqual(mail.outbox, [])
+        self.assertFalse(ActivityLog.objects.exists())
+
+    def test_send_failure_is_logged_not_raised(self):
+        self.make_user("m1", email="m1@lab.test")
+
+        for error in (smtplib.SMTPException("relay down"), OSError("connection refused")):
+            with self.subTest(error=error):
+                ActivityLog.objects.all().delete()
+                with patch("core.utils.send_mail", side_effect=error):
+                    with self.assertLogs("core.utils", level="ERROR"):
+                        sent = notify_lab_managers("Locked out", "body")
+
+                self.assertEqual(sent, 0)
+                entry = ActivityLog.objects.get()
+                self.assertEqual(entry.action, "email_failed")
+                self.assertIsNone(entry.user)
+                self.assertIn("Locked out", entry.details)
+                self.assertIn(str(error), entry.details)
+
+    def test_other_errors_are_not_swallowed(self):
+        self.make_user("m1", email="m1@lab.test")
+
+        with patch("core.utils.send_mail", side_effect=ValueError("bug")):
+            with self.assertRaises(ValueError):
+                notify_lab_managers("s", "b")
+
+
+class UnlockPageTests(TestCase):
+    """SXFT-15: the lab manager lists locked accounts and unlocks them."""
+
+    def setUp(self):
+        for name in ("tech1", "tech2"):
+            User.objects.create_user(
+                username=name, password="s3cret-pass", role=User.Role.TECHNICIAN, must_change_password=False
+            )
+        self.manager = User.objects.create_user(
+            username="m1", role=User.Role.LAB_MANAGER, must_change_password=False
+        )
+
+    def attempt(self, username, password="wrong"):
+        return self.client.post("/accounts/login/", {"username": username, "password": password})
+
+    def lock(self, username):
+        for _ in range(5):
+            self.attempt(username)
+
+    def test_lists_only_locked_accounts(self):
+        self.lock("tech1")
+        self.attempt("tech2")  # one failure is not a lock
+        self.client.force_login(self.manager)
+
+        response = self.client.get(reverse("locked_accounts"))
+        self.assertContains(response, "tech1")
+        self.assertNotContains(response, "tech2")
+
+    def test_unlock_lets_the_user_sign_in_and_is_logged(self):
+        self.lock("tech1")
+        self.client.force_login(self.manager)
+        self.client.post(reverse("unlock_account"), {"username": "tech1"})
+        self.client.logout()
+
+        response = self.attempt("tech1", password="s3cret-pass")
+        self.assertEqual(response.status_code, 302)
+        entry = ActivityLog.objects.get(action="account_unlocked")
+        self.assertEqual(entry.user, self.manager)
+        self.assertIn("tech1", entry.details)
+
+    def test_lists_account_locked_from_two_browsers(self):
+        for agent, times in (("browser-a", 3), ("browser-b", 2)):
+            for _ in range(times):
+                self.client.post("/accounts/login/", {"username": "tech1", "password": "wrong"}, HTTP_USER_AGENT=agent)
+        self.assertEqual(self.attempt("tech1", password="s3cret-pass").status_code, 429)
+        self.client.force_login(self.manager)
+        self.assertContains(self.client.get(reverse("locked_accounts")), "tech1")
+
+        self.client.post(reverse("unlock_account"), {"username": "tech1"})
+        self.client.logout()
+        self.assertEqual(self.attempt("tech1", password="s3cret-pass").status_code, 302)
+
+    def test_unknown_username_is_not_listed_or_unlocked(self):
+        self.lock("ghost")
+        self.client.force_login(self.manager)
+        self.assertNotContains(self.client.get(reverse("locked_accounts")), "ghost")
+
+        self.client.post(reverse("unlock_account"), {"username": "ghost"})
+        self.assertFalse(ActivityLog.objects.filter(action="account_unlocked").exists())
+
+    def test_blank_username_unlocks_nothing(self):
+        self.lock("tech1")
+        self.client.force_login(self.manager)
+        self.client.post(reverse("unlock_account"), {"username": ""})
+
+        self.assertContains(self.client.get(reverse("locked_accounts")), "tech1")
+        self.assertFalse(ActivityLog.objects.filter(action="account_unlocked").exists())
+
+    def test_unlocking_an_account_that_is_not_locked_logs_nothing(self):
+        self.attempt("tech2")
+        self.client.force_login(self.manager)
+        self.client.post(reverse("unlock_account"), {"username": "tech2"})
+
+        self.assertFalse(ActivityLog.objects.filter(action="account_unlocked").exists())
+
+    def test_other_roles_get_403(self):
+        self.lock("tech2")
+        self.client.force_login(User.objects.get(username="tech1"))
+        self.assertEqual(self.client.get(reverse("locked_accounts")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("unlock_account"), {"username": "tech2"}).status_code, 403)
+        self.client.logout()
+        self.assertEqual(self.attempt("tech2", password="s3cret-pass").status_code, 429)

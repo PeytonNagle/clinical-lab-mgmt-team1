@@ -36,6 +36,42 @@ Every account uses the password `TestPass123!`.
 Only lab managers can create accounts, so whoever installs the system creates the first one:
 `python manage.py create_lab_manager <username> [--email EMAIL]`. It prints a temporary password, which the manager must change on first login.
 
+### Account lockout
+
+Five wrong passwords in a row lock that username (django-axes). A correct password before the fifth resets the count.
+The lock never expires on its own. A lab manager unlocks it on **Locked accounts** (`/accounts/locked/`, in the navbar). The username is locked, not the computer, so others can still sign in from the same machine.
+
+If the only lab manager is locked out, unlock them from the server:
+
+```sh
+python manage.py axes_reset_username <username>
+```
+
+When an account locks, every active lab manager with an email address gets one email, and the lockout goes in the activity log.
+
+### Email
+
+With no email settings, emails print in the `runserver` terminal. No account is needed.
+
+To see them in an inbox, each person makes their own free [Mailtrap](https://mailtrap.io) sandbox (don't share credentials). It never delivers to real addresses.
+
+1. In Mailtrap, open your sandbox's SMTP credentials and copy the username and password.
+2. Add them to `.env` (see `.env.example`):
+
+   ```sh
+   EMAIL_HOST=sandbox.smtp.mailtrap.io
+   EMAIL_PORT=2525
+   EMAIL_HOST_USER=<username>
+   EMAIL_HOST_PASSWORD=<password>
+   ```
+
+3. Check it: `python manage.py sendtestemail manager1@example.com` should land in your sandbox. Seeded managers have no email, so set one in `/admin/` to receive lockout emails.
+4. Restart `runserver`. Lockout emails now show up in your sandbox.
+
+`CERTIFICATE_VERIFY_FAILED`? Python from python.org needs its certificates installed once: `open "/Applications/Python 3.13/Install Certificates.command"`.
+
+Sending real email later only means pointing these settings at a real mail server. If sending fails, sign-in still works and the failure goes in the activity log.
+
 ## Folders
 
 | Folder         | What goes in                                                                        | When                           |
@@ -83,6 +119,7 @@ Every page requires login except the login page.
 | `/samples/<id>/label/` | Tube label with barcode (collector prints once; lab manager reprints) |
 | `/lab/collect/samples/<id>/supplies/` | Run test supply check (collector runs, lab manager views) |
 | `/staff/register/` | Create a staff account (lab manager only)                            |
+| `/accounts/locked/` | Locked accounts, with an Unlock button for each (lab manager only). Also linked in the navbar |
 | `/results/upload/` | Upload a machine result `.txt` file (technician). Format and Test IDs: top of `lab/importer.py` |
 | `/inventory/`      | Supply list with stock left and next expiry (lab manager). Also linked in the navbar |
 | `/inventory/new/`  | Add a supply item (lab manager)                                      |
