@@ -512,9 +512,21 @@ class UnlockPageTests(TestCase):
         for agent, times in (("browser-a", 3), ("browser-b", 2)):
             for _ in range(times):
                 self.client.post("/accounts/login/", {"username": "tech1", "password": "wrong"}, HTTP_USER_AGENT=agent)
+        self.assertEqual(self.attempt("tech1", password="s3cret-pass").status_code, 429)
         self.client.force_login(self.manager)
-
         self.assertContains(self.client.get(reverse("locked_accounts")), "tech1")
+
+        self.client.post(reverse("unlock_account"), {"username": "tech1"})
+        self.client.logout()
+        self.assertEqual(self.attempt("tech1", password="s3cret-pass").status_code, 302)
+
+    def test_unknown_username_is_not_listed_or_unlocked(self):
+        self.lock("ghost")
+        self.client.force_login(self.manager)
+        self.assertNotContains(self.client.get(reverse("locked_accounts")), "ghost")
+
+        self.client.post(reverse("unlock_account"), {"username": "ghost"})
+        self.assertFalse(ActivityLog.objects.filter(action="account_unlocked").exists())
 
     def test_blank_username_unlocks_nothing(self):
         self.lock("tech1")
