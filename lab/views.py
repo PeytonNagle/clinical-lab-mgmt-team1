@@ -20,7 +20,7 @@ from .phone import phone_digits
 
 from django.core.exceptions import PermissionDenied
 from inventory.models import TestSupply
-from inventory.stock import check_supplies, use_supplies
+from inventory.stock import check_supplies, supply_status_for_orders, use_supplies
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
 # Cashiers are added by change request for backlog item 5.
@@ -285,6 +285,8 @@ def collector_dashboard(request):
         .prefetch_related("tests")
         .order_by("created_at")
     )
+    # Show each order's supply status before collecting (SXFT-98). Display only: Collect isn't blocked yet.
+    waiting = supply_status_for_orders(waiting)
     collected_today = (
         Sample.objects.filter(collected_at__date=timezone.localdate())
         .select_related("order__patient", "collected_by")
