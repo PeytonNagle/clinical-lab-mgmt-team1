@@ -1690,6 +1690,130 @@ class CollectionBlockingTests(TestCase):
             self.assertIn("FOR UPDATE", sql[lock])
 
 
+class CollectSampleAccessTests(TestCase):
+    """SXFT-101: only a specimen collector can collect; nobody else can use stock that way."""
+
+    @classmethod
+    def setUpTestData(cls):
+        stock_everything(10)
+        cls.order = make_order(["BMP"])
+        cls.url = reverse("collect_sample", args=[cls.order.pk])
+
+    def post(self):
+        return self.client.post(self.url, {"sample_type": Sample.SampleType.BLOOD})
+
+    def test_every_other_role_is_forbidden_to_collect(self):
+        before = dict(StockLot.objects.values_list("pk", "quantity"))
+        others = [
+            User.Role.CASHIER, User.Role.PATHOLOGIST, User.Role.TECHNICIAN,
+            User.Role.LAB_MANAGER, User.Role.PATIENT, User.Role.HEALTHCARE_PROVIDER,
+        ]
+        for role in others:
+            with self.subTest(role=role):
+                self.client.force_login(
+                    User.objects.create_user(username=f"u-{role}", role=role, must_change_password=False)
+                )
+                self.assertEqual(self.post().status_code, 403)
+        self.assertFalse(Sample.objects.exists())
+        self.assertEqual(dict(StockLot.objects.values_list("pk", "quantity")), before)
+
+    def test_anonymous_user_is_sent_to_login(self):
+        response = self.post()
+        self.assertRedirects(response, f"{reverse('login')}?next={self.url}", fetch_redirect_response=False)
+        self.assertFalse(Sample.objects.exists())
+
+
+class SupplyCheckDemoFlowTests(TestCase):
+    """SXFT-101 end to end: Ready -> collect -> stock drops -> a supply expires -> the next order is blocked."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.manager = User.objects.create_user(username="manager", role=User.Role.LAB_MANAGER, must_change_password=False)
+        cls.collector = User.objects.create_user(
+            username="collector", role=User.Role.SPECIMEN_COLLECTOR, must_change_password=False
+        )
+        # A test of our own that needs exactly two supplies, so the numbers are easy to follow.
+        cls.test_type = TestType.objects.create(code="DEMO", name="Demo panel")
+        cls.tube = SupplyItem.objects.create(name="Demo tube", unit="tubes")
+        cls.reagent = SupplyItem.objects.create(name="Demo reagent", unit="tests")
+        TestSupply.objects.create(test_type=cls.test_type, item=cls.tube, quantity=1)
+        TestSupply.objects.create(test_type=cls.test_type, item=cls.reagent, quantity=2)
+        in_a_month = (timezone.now() + timedelta(days=30)).date()
+        cls.tube_lot = StockLot.objects.create(
+            item=cls.tube, lot_number="TUBE-1", quantity=10, expiry_date=in_a_month, received_by=cls.manager
+        )
+        cls.reagent_lot = StockLot.objects.create(
+            item=cls.reagent, lot_number="REAG-1", quantity=10, expiry_date=in_a_month, received_by=cls.manager
+        )
+        cls.patient = make_patient(first_name="Demo", last_name="Patient")
+        cls.patient.save()
+
+    def setUp(self):
+        self.client.force_login(self.collector)
+
+    def order_demo(self):
+        return make_order(["DEMO"], patient=self.patient)
+
+    def collect(self, order):
+        return self.client.post(reverse("collect_sample", args=[order.pk]), {"sample_type": Sample.SampleType.BLOOD})
+
+    def test_demo_flow_from_ready_to_blocked(self):
+        dashboard = reverse("collector_dashboard")
+
+        # 1. The collector sees the new order as Ready, with both supplies and a Collect button.
+        first = self.order_demo()
+        response = self.client.get(dashboard)
+        self.assertContains(response, ">Ready</span>")
+        self.assertContains(response, "Demo tube: need 1, have 10 tubes")
+        self.assertContains(response, "Demo reagent: need 2, have 10 tests")
+        self.assertContains(response, reverse("collect_sample", args=[first.pk]))
+
+        # 2. Collecting it takes 1 tube and 2 reagent tests.
+        response = self.collect(first)
+        sample = Sample.objects.get(order=first)
+        self.assertRedirects(response, reverse("sample_label", args=[sample.pk]))
+        self.assertTrue(sample.is_collected)
+        self.tube_lot.refresh_from_db()
+        self.reagent_lot.refresh_from_db()
+        self.assertEqual((self.tube_lot.quantity, self.reagent_lot.quantity), (9, 8))
+
+        # 3. The reagent's only lot expires.
+        StockLot.objects.filter(pk=self.reagent_lot.pk).update(
+            expiry_date=(timezone.now() - timedelta(days=1)).date()
+        )
+
+        # 4. A second order for the same test shows Blocked instead of Collect.
+        second = self.order_demo()
+        response = self.client.get(dashboard)
+        self.assertContains(response, "Supply problem")
+        self.assertContains(response, ">Blocked</button>")
+        self.assertContains(response, "Expired: Demo reagent")
+        self.assertNotContains(response, reverse("collect_sample", args=[second.pk]))
+
+        # 5. Posting anyway is refused on the server: no Sample, no stock used, and it's logged.
+        response = self.collect(second)
+        self.assertRedirects(response, dashboard)
+        self.assertFalse(Sample.objects.filter(order=second).exists())
+        self.tube_lot.refresh_from_db()
+        self.assertEqual(self.tube_lot.quantity, 9)
+        log = ActivityLog.objects.get(action="test_blocked")
+        self.assertEqual(log.patient, self.patient)
+        self.assertEqual(log.user, self.collector)
+        self.assertEqual(log.details, f"order {second.pk}: Demo reagent expired")
+
+        # 6. It shows on the patient's activity log.
+        response = self.client.get(reverse("patient_detail", args=[self.patient.pk]))
+        self.assertContains(response, "Test blocked")
+        self.assertContains(response, f"order {second.pk}: Demo reagent expired")
+
+    def test_dashboard_lists_every_supply_the_order_needs(self):
+        self.order_demo()
+        response = self.client.get(reverse("collector_dashboard"))
+        self.assertContains(response, "Demo tube: need 1, have 10 tubes", count=1)
+        self.assertContains(response, "Demo reagent: need 2, have 10 tests", count=1)
+        self.assertContains(response, '<span class="badge text-bg-success">In stock</span>', count=2, html=True)
+
+
 class SupplyCheckPageTests(TestCase):
     """SXFT-23: the collector checks supplies before a test runs; problems block it and are logged."""
 
