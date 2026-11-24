@@ -409,3 +409,48 @@ class SupplyCheckTests(TestCase):
         with CaptureQueriesContext(connection) as queries:
             check_supplies(["BMP"])
         self.assertTrue(all(q["sql"].lstrip().upper().startswith("SELECT") for q in queries))
+
+class RecordUsageTests(TestCase):
+    """SXFT-96: a manager can take units out of a lot for use outside imported results."""
+
+    def setUp(self):
+        self.manager = make_manager()
+        self.client.force_login(self.manager)
+        self.item = supply("Pipette tips")
+        self.lot = add_lot(self.item, 10, received_by=self.manager)
+        self.url = reverse("lot_use", args=[self.lot.pk])
+
+    def test_only_the_lab_manager_can_open_the_page(self):
+        for role in (set(STAFF_ROLES) | {User.Role.PATIENT}) - {User.Role.LAB_MANAGER}:
+            self.client.force_login(User.objects.create_user(username=role, role=role, must_change_password=False))
+            with self.subTest(role=role):
+                self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.client.force_login(self.manager)
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+
+    def test_usage_lowers_the_lot_and_is_logged(self):
+        response = self.client.post(self.url, {"units_used": "4", "note": " QC run "})
+        self.assertRedirects(response, reverse("item_detail", args=[self.item.pk]))
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.quantity, 6)
+        details = ActivityLog.objects.get(action="stock_used").details
+        self.assertIn("used 4, 10 -> 6", details)
+        self.assertTrue(details.endswith("note: QC run"))
+
+    def test_using_more_than_the_lot_holds_is_rejected(self):
+        response = self.client.post(self.url, {"units_used": "11"})
+        self.assertIn("units_used", response.context["form"].errors)
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.quantity, 10)
+        self.assertFalse(ActivityLog.objects.filter(action="stock_used").exists())
+
+    def test_using_zero_is_rejected(self):
+        response = self.client.post(self.url, {"units_used": "0"})
+        self.assertIn("units_used", response.context["form"].errors)
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.quantity, 10)
+
+    def test_lot_of_a_removed_item_is_not_found(self):
+        self.item.deactivate()
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+        self.assertEqual(self.client.post(self.url, {"units_used": "1"}).status_code, 404)

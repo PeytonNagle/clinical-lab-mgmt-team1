@@ -10,4 +10,5 @@ urlpatterns = [
     path("inventory/<int:pk>/remove/", views.item_remove, name="item_remove"),
     path("inventory/<int:pk>/receive/", views.lot_receive, name="lot_receive"),
     path("inventory/lots/<int:pk>/edit/", views.lot_update, name="lot_update"),
+    path("inventory/lots/<int:pk>/use/", views.lot_use, name="lot_use"),
 ]
