@@ -30,6 +30,17 @@ class SupplyItemForm(forms.ModelForm):
         return name
 
 
+class SupplyItemRemoveForm(forms.Form):
+    """Why a supply item is being removed. Saved in the activity log."""
+
+    # Spaces are trimmed before the length check, so "    " doesn't count as a reason.
+    reason = forms.CharField(
+        min_length=5,
+        max_length=255,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "e.g. discontinued"}),
+    )
+
+
 class ReceiveLotForm(forms.ModelForm):
     """Log a delivery: a new lot for one item. The view sets the item and who received it."""
 

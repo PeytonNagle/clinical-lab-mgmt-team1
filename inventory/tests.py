@@ -263,13 +263,25 @@ class SupplyItemViewTests(TestCase):
         confirm = self.client.get(reverse("item_remove", args=[item.pk]))
         self.assertContains(confirm, "Those tests will stop taking it from stock.")
 
-        response = self.client.post(reverse("item_remove", args=[item.pk]))
+        response = self.client.post(reverse("item_remove", args=[item.pk]), {"reason": "discontinued"})
         self.assertRedirects(response, reverse("item_list"))
         item.refresh_from_db()
         self.assertFalse(item.is_active)
+        self.assertEqual(ActivityLog.objects.get(action="supply_removed").details, f"{item}, reason: discontinued")
         self.assertTrue(item.lots.exists())
         self.assertNotContains(self.client.get(reverse("item_list")), "Pipette tips")
         self.assertEqual(self.client.get(reverse("item_detail", args=[item.pk])).status_code, 404)
+
+    def test_remove_needs_a_real_reason(self):
+        item = supply("Pipette tips")
+        for reason in ("", "    ", "oops"):
+            with self.subTest(reason=reason):
+                response = self.client.post(reverse("item_remove", args=[item.pk]), {"reason": reason})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "is-invalid")
+                item.refresh_from_db()
+                self.assertTrue(item.is_active)
+        self.assertFalse(ActivityLog.objects.filter(action="supply_removed").exists())
 
 
 class ReceiveAndUpdateLotTests(TestCase):

@@ -9,7 +9,7 @@ from core.decorators import role_required
 from core.models import User
 from core.utils import log_event
 
-from .forms import ReceiveLotForm, StockLotForm, SupplyItemForm, UseStockForm
+from .forms import ReceiveLotForm, StockLotForm, SupplyItemForm, SupplyItemRemoveForm, UseStockForm
 from .models import StockLot, SupplyItem
 from .stock import on_hand
 
@@ -71,15 +71,16 @@ def item_update(request, pk):
 
 @manager_only
 def item_remove(request, pk):
-    """Confirm on GET, soft-delete on POST so the item's lots are kept. Tests stop using a removed item."""
+    """Confirm on GET, soft-delete on a POST with a reason so the item's lots are kept. Tests stop using a removed item."""
     item = get_object_or_404(SupplyItem.objects.annotate(lot_count=Count("lots")), pk=pk, is_active=True)
-    if request.method == "POST":
+    form = SupplyItemRemoveForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
         item.deactivate()
-        log_event(request.user, "supply_removed", details=str(item))
+        log_event(request.user, "supply_removed", details=f"{item}, reason: {form.cleaned_data['reason']}")
         messages.success(request, f"{item} removed.")
         return redirect("item_list")
     used_by = item.used_by.select_related("test_type")
-    return render(request, "inventory/item_confirm_remove.html", {"item": item, "used_by": used_by})
+    return render(request, "inventory/item_confirm_remove.html", {"item": item, "used_by": used_by, "form": form})
 
 
 @manager_only
