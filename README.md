@@ -8,6 +8,8 @@ SFWE 403 semester project, Group 1. Django + PostgreSQL + Bootstrap.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+# Once per machine: your own secret key (never share or commit it) and debug mode
+python -c "import secrets; print(f'\nSECRET_KEY={secrets.token_urlsafe(50)}\nDEBUG=True')" >> .env
 python manage.py migrate
 python manage.py seed      # fake users, patients, orders and stock; safe to re-run
 python manage.py runserver # http://127.0.0.1:8000/
