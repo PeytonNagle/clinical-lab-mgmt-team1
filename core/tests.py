@@ -1,14 +1,18 @@
+import os
 import smtplib
+import subprocess
+import sys
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
 
 from axes.models import AccessAttempt
+from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.core import mail
 from django.core.management import CommandError, call_command
 from django.template import RequestContext, Template
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -550,3 +554,30 @@ class UnlockPageTests(TestCase):
         self.assertEqual(self.client.post(reverse("unlock_account"), {"username": "tech2"}).status_code, 403)
         self.client.logout()
         self.assertEqual(self.attempt("tech2", password="s3cret-pass").status_code, 429)
+
+
+def load_settings(**env_vars):
+    # Settings load once per process, so each case needs a fresh interpreter.
+    code = (
+        "from django.conf import settings; "
+        "print(settings.SECRET_KEY, settings.DEBUG, ','.join(settings.ALLOWED_HOSTS))"
+    )
+    env = {**os.environ, "DJANGO_SETTINGS_MODULE": "config.settings", **env_vars}
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=settings.BASE_DIR, env=env, capture_output=True, text=True,
+    )
+
+
+class SettingsFromEnvTests(SimpleTestCase):
+    def test_reads_secret_key_debug_and_allowed_hosts_from_env(self):
+        result = load_settings(
+            SECRET_KEY="key-from-env", DEBUG="False", ALLOWED_HOSTS="clms.example.com,localhost"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "key-from-env False clms.example.com,localhost")
+
+    def test_refuses_to_start_without_secret_key_when_debug_is_off(self):
+        result = load_settings(SECRET_KEY="", DEBUG="False")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SECRET_KEY", result.stderr)
