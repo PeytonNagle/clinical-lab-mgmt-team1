@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.db.models import Q, Value
 from django.db.models.functions import Replace
 from django.shortcuts import get_object_or_404, redirect, render
@@ -19,7 +19,8 @@ from .models import PANEL_MODELS, Patient, Sample, TestOrder
 from .phone import phone_digits
 
 from django.core.exceptions import PermissionDenied
-from inventory.stock import check_supplies
+from inventory.models import StockLot, TestSupply
+from inventory.stock import EXPIRED, check_supplies, supply_status_for_orders, use_supplies
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
 # Cashiers are added by change request for backlog item 5.
@@ -284,6 +285,8 @@ def collector_dashboard(request):
         .prefetch_related("tests")
         .order_by("created_at")
     )
+    # Show each order's supply status before collecting (SXFT-98). Display only: Collect isn't blocked yet.
+    waiting = supply_status_for_orders(waiting)
     collected_today = (
         Sample.objects.filter(collected_at__date=timezone.localdate())
         .select_related("order__patient", "collected_by")
@@ -314,25 +317,92 @@ def collect_sample(request, order_id):
         messages.error(request, f"Choose a sample type for order #{order.pk}.")
         return redirect("collector_dashboard")
     sample_type = form.cleaned_data["sample_type"]
-    with transaction.atomic():
-        sample, _ = Sample.objects.get_or_create(order=order, defaults={"sample_type": sample_type})
-        # One UPDATE that only matches an uncollected sample, so a double click can't collect twice.
-        updated = Sample.objects.filter(pk=sample.pk, collected_at__isnull=True).update(
-            collected_at=timezone.now(), collected_by=request.user, sample_type=sample_type
-        )
-        if updated == 1:
-            type_label = Sample.SampleType(sample_type).label
-            log_event(
-                request.user,
-                "sample_collected",
-                patient=order.patient,
-                details=f"order {order.pk}, barcode {sample.barcode}, {type_label}",
+    shortages = {}
+    try:
+        # Checking, collecting and taking stock succeed or fail together: no sample marked collected without its stock.
+        with transaction.atomic():
+            # Spec 6.3.7: block before any Sample exists. Lock the lots first, so two collectors can't both
+            # pass the check on the last units; the second one waits here and then sees what is left.
+            needed_items = TestSupply.objects.filter(test_type__in=order.tests.all(), item__is_active=True).values("item")
+            list(StockLot.objects.select_for_update().filter(item__in=needed_items, quantity__gt=0)
+                 .order_by("pk").values_list("pk", flat=True))
+            supply_status_for_orders([order])
+            if not order.supply_ready:
+                log_event(
+                    request.user, "test_blocked", patient=order.patient,
+                    details=f"order {order.pk}: " + "; ".join(_blocked_log_parts(order)),
+                )
+                messages.error(
+                    request,
+                    f"Can't collect order #{order.pk}: {_blocked_reason(order)}. Tell the lab manager.",
+                )
+                return redirect("collector_dashboard")
+            sample, _ = Sample.objects.get_or_create(order=order, defaults={"sample_type": sample_type})
+            # One UPDATE that only matches an uncollected sample, so a double click can't collect twice.
+            updated = Sample.objects.filter(pk=sample.pk, collected_at__isnull=True).update(
+                collected_at=timezone.now(), collected_by=request.user, sample_type=sample_type
             )
+            if updated == 1:
+                type_label = Sample.SampleType(sample_type).label
+                log_event(
+                    request.user,
+                    "sample_collected",
+                    patient=order.patient,
+                    details=f"order {order.pk}, barcode {sample.barcode}, {type_label}",
+                )
+                shortages = _use_order_supplies(request.user, order)
+    except DatabaseError:
+        messages.error(request, f"Couldn't collect order #{order.pk}: updating stock failed. Try again.")
+        return redirect("collector_dashboard")
     if updated == 0:
         messages.error(request, f"The sample for order #{order.pk} has already been collected.")
         return redirect("collector_dashboard")
     messages.success(request, f"Sample {sample.barcode} collected for {order.patient}. Print its label now.")
+    if shortages:
+        short = ", ".join(f"{item} ({missing} {item.unit})" for item, missing in shortages.items())
+        messages.warning(request, f"Not enough stock for order #{order.pk}: short {short}. Tell the lab manager.")
     return redirect("sample_label", pk=sample.pk)
+
+
+def _problem_rows(order):
+    """The supplies blocking this order (Expired or Out of stock). Needs supply_status_for_orders first."""
+    return [row for row in order.supply_rows if not row.is_ok]
+
+
+def _blocked_reason(order):
+    """Short reason for people, e.g. "Expired: Lipid reagent; Out of stock: Pipette tips"."""
+    return "; ".join(f"{row.status}: {row.item.name}" for row in _problem_rows(order))
+
+
+def _blocked_log_parts(order):
+    """Log wording per problem supply, e.g. "Lipid reagent expired" or "Pipette tips needs 2, has 1"."""
+    return [
+        f"{row.item.name} expired" if row.status == EXPIRED else f"{row.item.name} needs {row.needed}, has {row.available}"
+        for row in _problem_rows(order)
+    ]
+
+
+def _use_order_supplies(user, order):
+    """Take every test's supplies from stock for a just-collected order and log what was taken.
+
+    Call inside the collection's transaction, after the supply check (SXFT-99) has passed with the lots
+    locked, so a shortage shouldn't happen here; if one does, it is logged and returned as {item: units short}.
+    """
+    codes = [test.code for test in order.tests.all()]
+    needed, shortages = {}, {}
+    for need in TestSupply.objects.filter(test_type__code__in=codes, item__is_active=True).select_related("item"):
+        needed[need.item] = needed.get(need.item, 0) + need.quantity
+    for code in codes:
+        for item, missing in use_supplies(code):
+            shortages[item] = shortages.get(item, 0) + missing
+    taken = {item: amount - shortages.get(item, 0) for item, amount in needed.items()}
+    used = ", ".join(f"{item.name} x{amount}" for item, amount in sorted(taken.items(), key=lambda p: p[0].name) if amount)
+    if used or shortages:
+        details = f"order {order.pk}: {used or 'nothing'}"
+        if shortages:
+            details += "; short: " + ", ".join(f"{item.name} x{missing}" for item, missing in shortages.items())
+        log_event(user, "stock_used", patient=order.patient, details=details)
+    return shortages
 
 @role_required(User.Role.SPECIMEN_COLLECTOR, User.Role.LAB_MANAGER)
 def supply_check(request, pk):

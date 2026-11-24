@@ -1,14 +1,18 @@
 from datetime import timedelta
+from unittest import mock
 
+from django.contrib.messages import get_messages
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError, transaction, connection
+from django.db import DatabaseError, IntegrityError, transaction, connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
 from core.models import ActivityLog, STAFF_ROLES, User
+from lab import views as lab_views
 from lab.importer import import_results
+from lab.models import Sample
 from lab.tests import bmp_lines, cbc_lines, make_order
 
 from .models import StockLot, SupplyItem, TestSupply
@@ -144,8 +148,119 @@ class UseSuppliesTests(TestCase):
         self.assertEqual(self.tips.lots.get().quantity, 10)
 
 
-class ImportUsesStockTests(TestCase):
-    """SXFT-82: saving uploaded results takes stock; rejected results don't."""
+def stock_levels():
+    """{item name: units on hand} for every seeded item."""
+    return {item.name: on_hand(item) for item in SupplyItem.objects.all()}
+
+
+class CollectionUsesStockTests(TestCase):
+    """SXFT-97: stock is taken when the specimen is collected (6.4.1), not when results are imported."""
+
+    def setUp(self):
+        manager = make_manager()
+        for item in SupplyItem.objects.all():
+            add_lot(item, 10, received_by=manager)
+        self.order = make_order(["BMP", "CBC"])
+        self.collect_url = reverse("collect_sample", args=[self.order.pk])
+
+    def login_as(self, role):
+        user = User.objects.create_user(username=role, role=role, must_change_password=False)
+        self.client.force_login(user)
+        return user
+
+    def collect(self):
+        return self.client.post(self.collect_url, {"sample_type": Sample.SampleType.BLOOD})
+
+    def expected_after_one_collection(self):
+        expected = stock_levels()
+        for need in TestSupply.objects.filter(test_type__code__in=["BMP", "CBC"]).select_related("item"):
+            expected[need.item.name] -= need.quantity
+        return expected
+
+    def test_collecting_takes_each_supply_by_its_test_supply_amount(self):
+        expected = self.expected_after_one_collection()
+        collector = self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.collect()
+        sample = Sample.objects.get(order=self.order)
+        self.assertRedirects(response, reverse("sample_label", args=[sample.pk]))
+        self.assertTrue(sample.is_collected)
+        self.assertEqual(stock_levels(), expected)
+        # Pipette tips are used by both panels, so their amounts add up.
+        self.assertEqual(on_hand(supply("Pipette tips")), 10 - sum(
+            TestSupply.objects.filter(test_type__code__in=["BMP", "CBC"], item__name="Pipette tips")
+            .values_list("quantity", flat=True)
+        ))
+        log = ActivityLog.objects.get(action="stock_used")
+        self.assertEqual(log.user, collector)
+        self.assertEqual(log.patient, self.order.patient)
+        self.assertTrue(log.details.startswith(f"order {self.order.pk}: "))
+        self.assertIn("BMP reagent cartridge x1", log.details)
+        self.assertNotIn("short", log.details)
+
+    def test_collecting_the_same_order_twice_takes_stock_once(self):
+        expected = self.expected_after_one_collection()
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.collect()
+        self.assertRedirects(self.collect(), reverse("collector_dashboard"))
+        self.assertEqual(stock_levels(), expected)
+        self.assertEqual(ActivityLog.objects.filter(action="stock_used").count(), 1)
+
+    def test_a_stock_failure_leaves_the_sample_uncollected(self):
+        before = stock_levels()
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        # Fails on the second test, after the first one's stock was already taken.
+        real = lab_views.use_supplies
+        calls = []
+
+        def failing(code):
+            calls.append(code)
+            if len(calls) == 2:
+                raise DatabaseError("lock timeout")
+            return real(code)
+
+        with mock.patch.object(lab_views, "use_supplies", side_effect=failing):
+            response = self.collect()
+        self.assertRedirects(response, reverse("collector_dashboard"))
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(Sample.objects.filter(order=self.order, collected_at__isnull=False).exists())
+        self.assertEqual(stock_levels(), before)
+        self.assertFalse(ActivityLog.objects.filter(action__in=["sample_collected", "stock_used"]).exists())
+
+    def test_a_shortage_blocks_and_takes_no_stock(self):
+        # SXFT-99: since F2, a shortage stops collection before any stock is used.
+        supply("BMP reagent cartridge").lots.update(quantity=0)
+        before = stock_levels()
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        response = self.collect()
+        self.assertRedirects(response, reverse("collector_dashboard"))
+        self.assertFalse(Sample.objects.exists())
+        self.assertEqual(stock_levels(), before)
+        self.assertFalse(ActivityLog.objects.filter(action="stock_used").exists())
+        shown = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("Out of stock: BMP reagent cartridge" in m for m in shown), shown)
+
+    def test_technician_and_lab_manager_cannot_collect_or_use_stock(self):
+        before = stock_levels()
+        for role in (User.Role.TECHNICIAN, User.Role.LAB_MANAGER):
+            with self.subTest(role=role):
+                self.login_as(role)
+                self.assertEqual(self.collect().status_code, 403)
+        self.assertFalse(Sample.objects.exists())
+        self.assertEqual(stock_levels(), before)
+
+    def test_importing_results_for_a_collected_order_does_not_change_stock(self):
+        self.login_as(User.Role.SPECIMEN_COLLECTOR)
+        self.collect()
+        after_collection = stock_levels()
+        tech = User.objects.create_user(username="tech", role=User.Role.TECHNICIAN, must_change_password=False)
+        report = import_results(bmp_lines(self.order.pk) + cbc_lines(self.order.pk), tech)
+        self.assertEqual(len(report.saved), 2)
+        self.assertEqual(stock_levels(), after_collection)
+        self.assertFalse(hasattr(report, "stock_warnings"))
+
+
+class ImportDoesNotUseStockTests(TestCase):
+    """SXFT-97: importing results never changes inventory, even when stock is short."""
 
     def setUp(self):
         self.tech = User.objects.create_user(username="tech", role=User.Role.TECHNICIAN, must_change_password=False)
@@ -153,28 +268,25 @@ class ImportUsesStockTests(TestCase):
         for item in SupplyItem.objects.all():
             add_lot(item, 10, received_by=manager)
 
-    def test_each_saved_panel_takes_stock(self):
+    def test_saved_panels_take_no_stock(self):
+        before = stock_levels()
         bmp_order, cbc_order = make_order(["BMP"]), make_order(["CBC"])
         report = import_results(bmp_lines(bmp_order.pk) + cbc_lines(cbc_order.pk), self.tech)
         self.assertEqual(len(report.saved), 2)
-        self.assertEqual(report.stock_warnings, [])
-        self.assertEqual(on_hand(supply("BMP reagent cartridge")), 9)
-        self.assertEqual(on_hand(supply("Hematology reagent pack")), 9)
-        self.assertEqual(on_hand(supply("Pipette tips")), 8)
+        self.assertEqual(stock_levels(), before)
+        self.assertFalse(ActivityLog.objects.filter(action="stock_used").exists())
 
     def test_rejected_panels_take_nothing(self):
         report = import_results(bmp_lines(9999), self.tech)
         self.assertEqual(len(report.rejected), 1)
         self.assertEqual(on_hand(supply("BMP reagent cartridge")), 10)
 
-    def test_a_shortage_still_saves_the_result_with_a_warning(self):
+    def test_no_stock_still_saves_the_result(self):
         supply("BMP reagent cartridge").lots.update(quantity=0)
         order = make_order(["BMP"])
         report = import_results(bmp_lines(order.pk), self.tech)
         self.assertEqual(len(report.saved), 1)
-        self.assertEqual(
-            report.stock_warnings, [(f"Order {order.pk}, BMP", "BMP reagent cartridge ran out, 1 tests short")]
-        )
+        self.assertEqual(report.rejected, [])
 
 
 class InventoryRoleAccessTests(TestCase):
@@ -328,17 +440,17 @@ class ReceiveAndUpdateLotTests(TestCase):
         self.assertContains(response, "CBC 1")
 
 
-class UploadShowsStockWarningsTests(TestCase):
-    """SXFT-82 through the real upload page: a technician sees when stock ran out."""
+class UploadIgnoresStockTests(TestCase):
+    """SXFT-97 through the real upload page: with no stock at all, results save and no stock warning shows."""
 
-    def test_upload_page_shows_stock_warning(self):
+    def test_upload_page_saves_without_stock_warning(self):
         self.client.force_login(User.objects.create_user(username="t", role=User.Role.TECHNICIAN, must_change_password=False))
         order = make_order(["BMP"])
         upload = SimpleUploadedFile("bmp.txt", bmp_lines(order.pk).encode())
         response = self.client.post(reverse("result_upload"), {"file": upload})
         self.assertContains(response, "Saved (1)")
-        self.assertContains(response, "Stock warnings (3)")
-        self.assertContains(response, "Pipette tips ran out, 2 tips short")
+        self.assertNotContains(response, "Stock warnings")
+        self.assertNotContains(response, "ran out")
 
 
 class SupplyCheckTests(TestCase):

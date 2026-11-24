@@ -2,7 +2,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from django.conf import settings 
+from django.conf import settings
+from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, connection, transaction
@@ -12,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from core.models import ActivityLog, User, STAFF_ROLES
-from inventory.models import StockLot, TestSupply
+from inventory.models import StockLot, SupplyItem, TestSupply
 
 from .barcodes import barcode_svg
 from .importer import ParseError, import_results, parse_line
@@ -548,6 +549,16 @@ def make_order(codes=("BMP",), patient=None):
     )
     order.tests.set(TestType.objects.filter(code__in=codes))
     return order
+
+
+def stock_everything(quantity=100):
+    """Put a fresh lot of every supply item in stock, so collecting isn't blocked."""
+    manager, _ = User.objects.get_or_create(username="stock-manager", defaults={"role": User.Role.LAB_MANAGER})
+    for item in SupplyItem.objects.all():
+        StockLot.objects.create(
+            item=item, lot_number="STOCK", quantity=quantity, received_by=manager,
+            expiry_date=timezone.localdate() + timedelta(days=60),
+        )
 
 
 def bmp_lines(order_id, glucose="92", sodium="140", potassium="4.1"):
@@ -1283,6 +1294,8 @@ class CollectorDashboardTests(TestCase):
         self.order = make_order(["BMP", "CBC"])
         self.url = reverse("collector_dashboard")
         self.collect_url = reverse("collect_sample", args=[self.order.pk])
+        # Plenty of every supply, so collection isn't blocked (SXFT-99 is tested in CollectionBlockingTests).
+        stock_everything()
 
     def login_as(self, role):
         user = User.objects.create_user(
@@ -1425,6 +1438,380 @@ class CollectorDashboardTests(TestCase):
             response = self.client.get(self.url)
         self.assertEqual(len(response.context["waiting"]), 7)
         self.assertEqual(len(few), len(many))
+
+
+class CollectorSupplyStatusTests(TestCase):
+    """SXFT-98 F1: each waiting order shows its supply status before Collect (6.3.3). Display only."""
+
+    def setUp(self):
+        self.manager = User.objects.create_user(username="manager", role=User.Role.LAB_MANAGER, must_change_password=False)
+        self.collector = User.objects.create_user(
+            username="collector", role=User.Role.SPECIMEN_COLLECTOR, must_change_password=False
+        )
+        self.client.force_login(self.collector)
+        # A BMP needs 1 tube, 1 cartridge and 2 pipette tips.
+        self.needs = {s.item.name: s.quantity for s in TestSupply.objects.filter(test_type__code="BMP").select_related("item")}
+        self.url = reverse("collector_dashboard")
+
+    def lot(self, name, quantity, days_left=30, lot_number="LOT-1"):
+        need = TestSupply.objects.get(test_type__code="BMP", item__name=name)
+        StockLot.objects.create(
+            item=need.item, lot_number=lot_number, quantity=quantity, received_by=self.manager,
+            expiry_date=timezone.localdate() + timedelta(days=days_left),
+        )
+
+    def stock_bmp(self, quantity=10):
+        for name in self.needs:
+            self.lot(name, quantity)
+
+    def statuses(self, response, order):
+        shown = next(o for o in response.context["waiting"] if o.pk == order.pk)
+        return {row.item.name: (row.needed, row.available, row.status) for row in shown.supply_rows}, shown.supply_ready
+
+    def test_plentiful_supplies_are_in_stock_and_ready(self):
+        order = make_order(["BMP"])
+        self.stock_bmp(10)
+        response = self.client.get(self.url)
+        rows, ready = self.statuses(response, order)
+        self.assertEqual(rows, {name: (need, 10, "In stock") for name, need in self.needs.items()})
+        self.assertTrue(ready)
+        self.assertContains(response, ">Ready</span>")
+        self.assertContains(response, "Pipette tips: need 2, have 10 tips")
+        self.assertNotContains(response, "Supply problem")
+
+    def test_enough_but_under_three_times_the_need_is_low_and_still_ready(self):
+        order = make_order(["BMP"])
+        self.stock_bmp(10)
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=5)  # need 2: 2 <= 5 < 6
+        response = self.client.get(self.url)
+        rows, ready = self.statuses(response, order)
+        self.assertEqual(rows["Pipette tips"], (2, 5, "Low"))
+        self.assertTrue(ready)
+        self.assertContains(response, '<span class="badge text-bg-warning">Low</span>', html=True)
+
+    def test_exactly_three_times_the_need_is_in_stock(self):
+        order = make_order(["BMP"])
+        self.stock_bmp(10)
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=6)
+        rows, _ = self.statuses(self.client.get(self.url), order)
+        self.assertEqual(rows["Pipette tips"], (2, 6, "In stock"))
+
+    def test_too_little_unexpired_stock_is_out_of_stock(self):
+        order = make_order(["BMP"])
+        self.stock_bmp(10)
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=1)
+        # Expired tips don't count, and some usable stock means out of stock rather than expired.
+        self.lot("Pipette tips", 50, days_left=-1, lot_number="OLD")
+        response = self.client.get(self.url)
+        rows, ready = self.statuses(response, order)
+        self.assertEqual(rows["Pipette tips"], (2, 1, "Out of stock"))
+        self.assertFalse(ready)
+        self.assertContains(response, "Supply problem")
+        self.assertContains(response, '<span class="badge text-bg-danger">Out of stock</span>', html=True)
+
+    def test_no_lots_at_all_is_out_of_stock(self):
+        order = make_order(["BMP"])
+        rows, ready = self.statuses(self.client.get(self.url), order)
+        self.assertEqual({status for _, _, status in rows.values()}, {"Out of stock"})
+        self.assertFalse(ready)
+
+    def test_only_expired_lots_is_expired(self):
+        order = make_order(["BMP"])
+        self.stock_bmp(10)
+        StockLot.objects.filter(item__name="BMP reagent cartridge").update(
+            expiry_date=timezone.localdate() - timedelta(days=1)
+        )
+        response = self.client.get(self.url)
+        rows, ready = self.statuses(response, order)
+        self.assertEqual(rows["BMP reagent cartridge"], (1, 0, "Expired"))
+        self.assertFalse(ready)
+        self.assertContains(response, '<span class="badge text-bg-danger">Expired</span>', html=True)
+
+    def test_a_lot_expiring_today_still_counts(self):
+        order = make_order(["BMP"])
+        for name in self.needs:
+            self.lot(name, 10, days_left=0)
+        rows, ready = self.statuses(self.client.get(self.url), order)
+        self.assertEqual({status for _, _, status in rows.values()}, {"In stock"})
+        self.assertTrue(ready)
+
+    def test_needs_add_up_across_an_orders_tests(self):
+        order = make_order(["BMP", "CBC"])
+        tips = sum(TestSupply.objects.filter(test_type__code__in=["BMP", "CBC"], item__name="Pipette tips")
+                   .values_list("quantity", flat=True))
+        rows, _ = self.statuses(self.client.get(self.url), order)
+        self.assertEqual(rows["Pipette tips"][0], tips)
+
+    def test_query_count_is_the_same_for_one_and_three_orders(self):
+        self.stock_bmp(10)
+        make_order(["BMP"])
+        with CaptureQueriesContext(connection) as one:
+            self.client.get(self.url)
+        make_order(["BMP", "CBC"])
+        make_order(["LIPID"])
+        with CaptureQueriesContext(connection) as three:
+            response = self.client.get(self.url)
+        self.assertEqual(len(response.context["waiting"]), 3)
+        self.assertEqual(len(one), len(three))
+
+    def test_a_supply_problem_shows_blocked_instead_of_collect(self):
+        order = make_order(["BMP"])
+        self.stock_bmp(10)
+        StockLot.objects.filter(item__name="BMP reagent cartridge").update(
+            expiry_date=timezone.localdate() - timedelta(days=1)
+        )
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=1)
+        response = self.client.get(self.url)
+        self.assertContains(response, "Supply problem")
+        self.assertContains(response, '<button type="button" class="btn btn-sm btn-secondary" disabled>Blocked</button>', html=True)
+        self.assertContains(response, "Expired: BMP reagent cartridge")
+        self.assertContains(response, "Out of stock: Pipette tips")
+        self.assertNotContains(response, reverse("collect_sample", args=[order.pk]))
+        self.assertNotContains(response, ">Collect</button>")
+
+    def test_low_still_shows_collect(self):
+        order = make_order(["BMP"])
+        self.stock_bmp(10)
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=3)
+        response = self.client.get(self.url)
+        self.assertContains(response, reverse("collect_sample", args=[order.pk]))
+        self.assertNotContains(response, ">Blocked</button>")
+
+    def test_lab_manager_sees_no_blocked_button(self):
+        make_order(["BMP"])
+        self.client.force_login(self.manager)
+        response = self.client.get(self.url)
+        self.assertContains(response, "Supply problem")
+        self.assertNotContains(response, ">Blocked</button>")
+
+    def test_checking_status_uses_no_stock(self):
+        self.stock_bmp(10)
+        make_order(["BMP"])
+        self.client.get(self.url)
+        self.assertEqual(set(StockLot.objects.values_list("quantity", flat=True)), {10})
+
+
+class CollectionBlockingTests(TestCase):
+    """SXFT-99 F2: an Expired or Out of stock supply blocks collection on the server (spec 6.3.7)."""
+
+    def setUp(self):
+        self.collector = User.objects.create_user(
+            username="collector", role=User.Role.SPECIMEN_COLLECTOR, must_change_password=False
+        )
+        self.client.force_login(self.collector)
+        stock_everything(10)
+        self.order = make_order(["BMP"])
+        self.url = reverse("collect_sample", args=[self.order.pk])
+
+    def collect(self):
+        return self.client.post(self.url, {"sample_type": Sample.SampleType.BLOOD})
+
+    def stock_levels(self):
+        return dict(StockLot.objects.values_list("pk", "quantity"))
+
+    def assert_blocked(self, response, before):
+        self.assertRedirects(response, reverse("collector_dashboard"))
+        self.assertFalse(Sample.objects.exists())
+        self.assertEqual(self.stock_levels(), before)
+        self.assertFalse(ActivityLog.objects.filter(action__in=["sample_collected", "stock_used"]).exists())
+        return ActivityLog.objects.get(action="test_blocked")
+
+    def messages_of(self, response):
+        return [str(m) for m in get_messages(response.wsgi_request)]
+
+    def test_expired_supply_blocks_logs_and_explains(self):
+        StockLot.objects.filter(item__name="BMP reagent cartridge").update(
+            expiry_date=timezone.localdate() - timedelta(days=1)
+        )
+        before = self.stock_levels()
+        response = self.collect()
+        log = self.assert_blocked(response, before)
+        self.assertEqual(log.user, self.collector)
+        self.assertEqual(log.patient, self.order.patient)
+        self.assertEqual(log.details, f"order {self.order.pk}: BMP reagent cartridge expired")
+        self.assertEqual(
+            self.messages_of(response),
+            [f"Can't collect order #{self.order.pk}: Expired: BMP reagent cartridge. Tell the lab manager."],
+        )
+
+    def test_out_of_stock_supply_blocks_and_says_how_much(self):
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=1)
+        before = self.stock_levels()
+        response = self.collect()
+        log = self.assert_blocked(response, before)
+        self.assertEqual(log.details, f"order {self.order.pk}: Pipette tips needs 2, has 1")
+        self.assertIn("Out of stock: Pipette tips", self.messages_of(response)[0])
+
+    def test_every_problem_is_listed(self):
+        StockLot.objects.filter(item__name="BMP reagent cartridge").update(
+            expiry_date=timezone.localdate() - timedelta(days=1)
+        )
+        StockLot.objects.filter(item__name="Pipette tips").delete()
+        log = self.assert_blocked(self.collect(), self.stock_levels())
+        self.assertEqual(
+            log.details, f"order {self.order.pk}: BMP reagent cartridge expired; Pipette tips needs 2, has 0"
+        )
+
+    def test_blocking_leaves_an_existing_sample_uncollected(self):
+        sample = Sample.objects.create(order=self.order, sample_type=Sample.SampleType.URINE)
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=0)
+        self.assertRedirects(self.collect(), reverse("collector_dashboard"))
+        sample.refresh_from_db()
+        self.assertFalse(sample.is_collected)
+        self.assertEqual(sample.sample_type, Sample.SampleType.URINE)
+
+    def test_low_does_not_block(self):
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=3)  # need 2, under 3x
+        response = self.collect()
+        sample = Sample.objects.get(order=self.order)
+        self.assertRedirects(response, reverse("sample_label", args=[sample.pk]))
+        self.assertTrue(sample.is_collected)
+        self.assertEqual(StockLot.objects.get(item__name="Pipette tips").quantity, 1)
+        self.assertFalse(ActivityLog.objects.filter(action="test_blocked").exists())
+
+    def test_the_last_units_can_be_used_then_the_next_order_is_blocked(self):
+        StockLot.objects.filter(item__name="Pipette tips").update(quantity=2)
+        self.collect()
+        self.assertTrue(Sample.objects.get(order=self.order).is_collected)
+        second = make_order(["BMP"])
+        self.client.post(reverse("collect_sample", args=[second.pk]), {"sample_type": Sample.SampleType.BLOOD})
+        self.assertFalse(Sample.objects.filter(order=second).exists())
+        log = ActivityLog.objects.get(action="test_blocked")
+        self.assertEqual(log.details, f"order {second.pk}: Pipette tips needs 2, has 0")
+
+    def test_the_needed_lots_are_locked_before_the_check(self):
+        with CaptureQueriesContext(connection) as queries:
+            self.collect()
+        sql = [q["sql"] for q in queries]
+        lock = next(i for i, s in enumerate(sql) if 'FROM "inventory_stocklot"' in s)
+        create = next(i for i, s in enumerate(sql) if s.startswith('INSERT INTO "lab_sample"'))
+        self.assertLess(lock, create)
+        if connection.features.has_select_for_update:
+            self.assertIn("FOR UPDATE", sql[lock])
+
+
+class CollectSampleAccessTests(TestCase):
+    """SXFT-101: only a specimen collector can collect; nobody else can use stock that way."""
+
+    @classmethod
+    def setUpTestData(cls):
+        stock_everything(10)
+        cls.order = make_order(["BMP"])
+        cls.url = reverse("collect_sample", args=[cls.order.pk])
+
+    def post(self):
+        return self.client.post(self.url, {"sample_type": Sample.SampleType.BLOOD})
+
+    def test_every_other_role_is_forbidden_to_collect(self):
+        before = dict(StockLot.objects.values_list("pk", "quantity"))
+        others = [
+            User.Role.CASHIER, User.Role.PATHOLOGIST, User.Role.TECHNICIAN,
+            User.Role.LAB_MANAGER, User.Role.PATIENT, User.Role.HEALTHCARE_PROVIDER,
+        ]
+        for role in others:
+            with self.subTest(role=role):
+                self.client.force_login(
+                    User.objects.create_user(username=f"u-{role}", role=role, must_change_password=False)
+                )
+                self.assertEqual(self.post().status_code, 403)
+        self.assertFalse(Sample.objects.exists())
+        self.assertEqual(dict(StockLot.objects.values_list("pk", "quantity")), before)
+
+    def test_anonymous_user_is_sent_to_login(self):
+        response = self.post()
+        self.assertRedirects(response, f"{reverse('login')}?next={self.url}", fetch_redirect_response=False)
+        self.assertFalse(Sample.objects.exists())
+
+
+class SupplyCheckDemoFlowTests(TestCase):
+    """SXFT-101 end to end: Ready -> collect -> stock drops -> a supply expires -> the next order is blocked."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.manager = User.objects.create_user(username="manager", role=User.Role.LAB_MANAGER, must_change_password=False)
+        cls.collector = User.objects.create_user(
+            username="collector", role=User.Role.SPECIMEN_COLLECTOR, must_change_password=False
+        )
+        # A test of our own that needs exactly two supplies, so the numbers are easy to follow.
+        cls.test_type = TestType.objects.create(code="DEMO", name="Demo panel")
+        cls.tube = SupplyItem.objects.create(name="Demo tube", unit="tubes")
+        cls.reagent = SupplyItem.objects.create(name="Demo reagent", unit="tests")
+        TestSupply.objects.create(test_type=cls.test_type, item=cls.tube, quantity=1)
+        TestSupply.objects.create(test_type=cls.test_type, item=cls.reagent, quantity=2)
+        in_a_month = (timezone.now() + timedelta(days=30)).date()
+        cls.tube_lot = StockLot.objects.create(
+            item=cls.tube, lot_number="TUBE-1", quantity=10, expiry_date=in_a_month, received_by=cls.manager
+        )
+        cls.reagent_lot = StockLot.objects.create(
+            item=cls.reagent, lot_number="REAG-1", quantity=10, expiry_date=in_a_month, received_by=cls.manager
+        )
+        cls.patient = make_patient(first_name="Demo", last_name="Patient")
+        cls.patient.save()
+
+    def setUp(self):
+        self.client.force_login(self.collector)
+
+    def order_demo(self):
+        return make_order(["DEMO"], patient=self.patient)
+
+    def collect(self, order):
+        return self.client.post(reverse("collect_sample", args=[order.pk]), {"sample_type": Sample.SampleType.BLOOD})
+
+    def test_demo_flow_from_ready_to_blocked(self):
+        dashboard = reverse("collector_dashboard")
+
+        # 1. The collector sees the new order as Ready, with both supplies and a Collect button.
+        first = self.order_demo()
+        response = self.client.get(dashboard)
+        self.assertContains(response, ">Ready</span>")
+        self.assertContains(response, "Demo tube: need 1, have 10 tubes")
+        self.assertContains(response, "Demo reagent: need 2, have 10 tests")
+        self.assertContains(response, reverse("collect_sample", args=[first.pk]))
+
+        # 2. Collecting it takes 1 tube and 2 reagent tests.
+        response = self.collect(first)
+        sample = Sample.objects.get(order=first)
+        self.assertRedirects(response, reverse("sample_label", args=[sample.pk]))
+        self.assertTrue(sample.is_collected)
+        self.tube_lot.refresh_from_db()
+        self.reagent_lot.refresh_from_db()
+        self.assertEqual((self.tube_lot.quantity, self.reagent_lot.quantity), (9, 8))
+
+        # 3. The reagent's only lot expires.
+        StockLot.objects.filter(pk=self.reagent_lot.pk).update(
+            expiry_date=(timezone.now() - timedelta(days=1)).date()
+        )
+
+        # 4. A second order for the same test shows Blocked instead of Collect.
+        second = self.order_demo()
+        response = self.client.get(dashboard)
+        self.assertContains(response, "Supply problem")
+        self.assertContains(response, ">Blocked</button>")
+        self.assertContains(response, "Expired: Demo reagent")
+        self.assertNotContains(response, reverse("collect_sample", args=[second.pk]))
+
+        # 5. Posting anyway is refused on the server: no Sample, no stock used, and it's logged.
+        response = self.collect(second)
+        self.assertRedirects(response, dashboard)
+        self.assertFalse(Sample.objects.filter(order=second).exists())
+        self.tube_lot.refresh_from_db()
+        self.assertEqual(self.tube_lot.quantity, 9)
+        log = ActivityLog.objects.get(action="test_blocked")
+        self.assertEqual(log.patient, self.patient)
+        self.assertEqual(log.user, self.collector)
+        self.assertEqual(log.details, f"order {second.pk}: Demo reagent expired")
+
+        # 6. It shows on the patient's activity log.
+        response = self.client.get(reverse("patient_detail", args=[self.patient.pk]))
+        self.assertContains(response, "Test blocked")
+        self.assertContains(response, f"order {second.pk}: Demo reagent expired")
+
+    def test_dashboard_lists_every_supply_the_order_needs(self):
+        self.order_demo()
+        response = self.client.get(reverse("collector_dashboard"))
+        self.assertContains(response, "Demo tube: need 1, have 10 tubes", count=1)
+        self.assertContains(response, "Demo reagent: need 2, have 10 tests", count=1)
+        self.assertContains(response, '<span class="badge text-bg-success">In stock</span>', count=2, html=True)
 
 
 class SupplyCheckPageTests(TestCase):

@@ -29,10 +29,32 @@
                             <td>{{ order.patient.date_of_birth|date:"m/d/Y" }}</td>
                             <td title="{% for test in order.tests.all %}{{ test.name }}{% if not forloop.last %}, {% endif %}{% endfor %}">
                                 {% for test in order.tests.all %}{{ test.code }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                                {% if order.supply_ready %}
+                                    <span class="badge text-bg-success ms-1">Ready</span>
+                                {% else %}
+                                    <span class="badge text-bg-danger ms-1">Supply problem</span>
+                                {% endif %}
+                                {% if order.supply_rows %}
+                                    <ul class="list-unstyled small mb-0 mt-1">
+                                        {% for row in order.supply_rows %}
+                                            <li>
+                                                <span class="badge text-bg-{{ row.color }}">{{ row.status }}</span>
+                                                {{ row.item.name }}: need {{ row.needed }}, have {{ row.available }} {{ row.item.unit }}
+                                            </li>
+                                        {% endfor %}
+                                    </ul>
+                                {% endif %}
                             </td>
                             <td>{{ order.get_source_display }}</td>
                             {% if can_collect %}
                                 <td>
+                                    {% if not order.supply_ready %}
+                                        {# Spec 6.3.7. The server checks again, so this is only a hint. #}
+                                        <button type="button" class="btn btn-sm btn-secondary" disabled>Blocked</button>
+                                        <div class="small text-danger mt-1">
+                                            {% for row in order.supply_rows %}{% if not row.is_ok %}{{ row.status }}: {{ row.item.name }}<br>{% endif %}{% endfor %}
+                                        </div>
+                                    {% else %}
                                     <form method="post" action="{% url 'collect_sample' order.pk %}" class="d-flex gap-2 m-0">
                                         {% csrf_token %}
                                         <select name="sample_type" class="form-select form-select-sm" style="width: auto;"
@@ -43,6 +65,7 @@
                                         </select>
                                         <button type="submit" class="btn btn-sm btn-primary">Collect</button>
                                     </form>
+                                    {% endif %}
                                 </td>
                             {% endif %}
                         </tr>
