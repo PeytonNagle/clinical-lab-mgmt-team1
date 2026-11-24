@@ -226,19 +226,18 @@ class CollectionUsesStockTests(TestCase):
         self.assertEqual(stock_levels(), before)
         self.assertFalse(ActivityLog.objects.filter(action__in=["sample_collected", "stock_used"]).exists())
 
-    def test_a_shortage_still_collects_and_warns(self):
+    def test_a_shortage_blocks_and_takes_no_stock(self):
+        # SXFT-99: since F2, a shortage stops collection before any stock is used.
         supply("BMP reagent cartridge").lots.update(quantity=0)
+        before = stock_levels()
         self.login_as(User.Role.SPECIMEN_COLLECTOR)
         response = self.collect()
-        sample = Sample.objects.get(order=self.order)
-        self.assertRedirects(response, reverse("sample_label", args=[sample.pk]))
-        self.assertTrue(sample.is_collected)
+        self.assertRedirects(response, reverse("collector_dashboard"))
+        self.assertFalse(Sample.objects.exists())
+        self.assertEqual(stock_levels(), before)
+        self.assertFalse(ActivityLog.objects.filter(action="stock_used").exists())
         shown = [str(m) for m in get_messages(response.wsgi_request)]
-        self.assertTrue(any("short BMP reagent cartridge (1 tests)" in m for m in shown), shown)
-        log = ActivityLog.objects.get(action="stock_used")
-        self.assertIn("short: BMP reagent cartridge x1", log.details)
-        # Nothing was taken of the missing cartridge, so it's only listed as short.
-        self.assertNotIn("BMP reagent cartridge", log.details.split(";")[0])
+        self.assertTrue(any("Out of stock: BMP reagent cartridge" in m for m in shown), shown)
 
     def test_technician_and_lab_manager_cannot_collect_or_use_stock(self):
         before = stock_levels()

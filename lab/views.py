@@ -19,8 +19,8 @@ from .models import PANEL_MODELS, Patient, Sample, TestOrder
 from .phone import phone_digits
 
 from django.core.exceptions import PermissionDenied
-from inventory.models import TestSupply
-from inventory.stock import check_supplies, supply_status_for_orders, use_supplies
+from inventory.models import StockLot, TestSupply
+from inventory.stock import EXPIRED, check_supplies, supply_status_for_orders, use_supplies
 
 # 6.1.5 allows specimen collectors and the lab manager to remove patients.
 # Cashiers are added by change request for backlog item 5.
@@ -319,8 +319,24 @@ def collect_sample(request, order_id):
     sample_type = form.cleaned_data["sample_type"]
     shortages = {}
     try:
-        # Collecting and taking stock succeed or fail together: no sample marked collected without its stock.
+        # Checking, collecting and taking stock succeed or fail together: no sample marked collected without its stock.
         with transaction.atomic():
+            # Spec 6.3.7: block before any Sample exists. Lock the lots first, so two collectors can't both
+            # pass the check on the last units; the second one waits here and then sees what is left.
+            needed_items = TestSupply.objects.filter(test_type__in=order.tests.all(), item__is_active=True).values("item")
+            list(StockLot.objects.select_for_update().filter(item__in=needed_items, quantity__gt=0)
+                 .order_by("pk").values_list("pk", flat=True))
+            supply_status_for_orders([order])
+            if not order.supply_ready:
+                log_event(
+                    request.user, "test_blocked", patient=order.patient,
+                    details=f"order {order.pk}: " + "; ".join(_blocked_log_parts(order)),
+                )
+                messages.error(
+                    request,
+                    f"Can't collect order #{order.pk}: {_blocked_reason(order)}. Tell the lab manager.",
+                )
+                return redirect("collector_dashboard")
             sample, _ = Sample.objects.get_or_create(order=order, defaults={"sample_type": sample_type})
             # One UPDATE that only matches an uncollected sample, so a double click can't collect twice.
             updated = Sample.objects.filter(pk=sample.pk, collected_at__isnull=True).update(
@@ -348,11 +364,29 @@ def collect_sample(request, order_id):
     return redirect("sample_label", pk=sample.pk)
 
 
+def _problem_rows(order):
+    """The supplies blocking this order (Expired or Out of stock). Needs supply_status_for_orders first."""
+    return [row for row in order.supply_rows if not row.is_ok]
+
+
+def _blocked_reason(order):
+    """Short reason for people, e.g. "Expired: Lipid reagent; Out of stock: Pipette tips"."""
+    return "; ".join(f"{row.status}: {row.item.name}" for row in _problem_rows(order))
+
+
+def _blocked_log_parts(order):
+    """Log wording per problem supply, e.g. "Lipid reagent expired" or "Pipette tips needs 2, has 1"."""
+    return [
+        f"{row.item.name} expired" if row.status == EXPIRED else f"{row.item.name} needs {row.needed}, has {row.available}"
+        for row in _problem_rows(order)
+    ]
+
+
 def _use_order_supplies(user, order):
     """Take every test's supplies from stock for a just-collected order and log what was taken.
 
-    Call inside the collection's transaction. A shortage doesn't stop collection (blocking is SXFT F2):
-    the shortfall is logged and returned as {item: units short}.
+    Call inside the collection's transaction, after the supply check (SXFT-99) has passed with the lots
+    locked, so a shortage shouldn't happen here; if one does, it is logged and returned as {item: units short}.
     """
     codes = [test.code for test in order.tests.all()]
     needed, shortages = {}, {}

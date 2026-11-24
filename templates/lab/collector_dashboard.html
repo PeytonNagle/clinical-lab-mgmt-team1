@@ -48,6 +48,13 @@
                             <td>{{ order.get_source_display }}</td>
                             {% if can_collect %}
                                 <td>
+                                    {% if not order.supply_ready %}
+                                        {# Spec 6.3.7. The server checks again, so this is only a hint. #}
+                                        <button type="button" class="btn btn-sm btn-secondary" disabled>Blocked</button>
+                                        <div class="small text-danger mt-1">
+                                            {% for row in order.supply_rows %}{% if not row.is_ok %}{{ row.status }}: {{ row.item.name }}<br>{% endif %}{% endfor %}
+                                        </div>
+                                    {% else %}
                                     <form method="post" action="{% url 'collect_sample' order.pk %}" class="d-flex gap-2 m-0">
                                         {% csrf_token %}
                                         <select name="sample_type" class="form-select form-select-sm" style="width: auto;"
@@ -58,6 +65,7 @@
                                         </select>
                                         <button type="submit" class="btn btn-sm btn-primary">Collect</button>
                                     </form>
+                                    {% endif %}
                                 </td>
                             {% endif %}
                         </tr>
