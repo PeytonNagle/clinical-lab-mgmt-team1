@@ -1,4 +1,4 @@
-Django>=5.1
+Django==6.1.3
 psycopg[binary]
 django-environ
 pytest
