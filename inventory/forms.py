@@ -75,3 +75,24 @@ class StockLotForm(forms.ModelForm):
 
     def clean_lot_number(self):
         return self.cleaned_data["lot_number"].strip().upper()
+
+
+class UseStockForm(forms.Form):
+    """Take units out of one lot for use outside imported results, e.g. QC, spills or breakage."""
+
+    units_used = forms.IntegerField(min_value=1, label="Units used")
+    note = forms.CharField(max_length=200, required=False, label="Note", help_text="Optional, e.g. QC run or spill.")
+
+    def __init__(self, *args, lot, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lot = lot
+        add_bootstrap_classes(self)
+
+    def clean_units_used(self):
+        units = self.cleaned_data["units_used"]
+        if units > self.lot.quantity:
+            raise forms.ValidationError(f"This lot only has {self.lot.quantity} {self.lot.item.unit} left.")
+        return units
+
+    def clean_note(self):
+        return self.cleaned_data["note"].strip()

@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Count, Min, Q, Sum
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404, redirect, render
@@ -8,7 +9,7 @@ from core.decorators import role_required
 from core.models import User
 from core.utils import log_event
 
-from .forms import ReceiveLotForm, StockLotForm, SupplyItemForm
+from .forms import ReceiveLotForm, StockLotForm, SupplyItemForm, UseStockForm
 from .models import StockLot, SupplyItem
 from .stock import on_hand
 
@@ -121,4 +122,34 @@ def lot_update(request, pk):
         return redirect("item_detail", lot.item.pk)
     return render(
         request, "inventory/form.html", {"form": form, "title": f"Edit lot {lot.lot_number}", "item": lot.item}
+    )
+
+
+@manager_only
+def lot_use(request, pk):
+    """Take units out of a lot for use outside imported results."""
+    lots = StockLot.objects.select_related("item").filter(item__is_active=True)
+    if request.method == "POST":
+        with transaction.atomic():
+            # Re-read under a row lock so an import can't change the quantity between the check and the write.
+            lot = get_object_or_404(lots.select_for_update(of=("self",)), pk=pk)
+            form = UseStockForm(request.POST, lot=lot)
+            if form.is_valid():
+                used, before = form.cleaned_data["units_used"], lot.quantity
+                lot.quantity = before - used
+                lot.save(update_fields=["quantity"])
+                note = form.cleaned_data["note"]
+                log_event(
+                    request.user,
+                    "stock_used",
+                    details=f"{lot.item}: lot {lot.lot_number}, used {used}, {before} -> {lot.quantity} {lot.item.unit}"
+                    + (f", note: {note}" if note else ""),
+                )
+                messages.success(request, f"Recorded {used} {lot.item.unit} used from lot {lot.lot_number}.")
+                return redirect("item_detail", lot.item.pk)
+    else:
+        lot = get_object_or_404(lots, pk=pk)
+        form = UseStockForm(lot=lot)
+    return render(
+        request, "inventory/form.html", {"form": form, "title": f"Record usage of lot {lot.lot_number}", "item": lot.item}
     )
